@@ -1,5 +1,7 @@
 # ccseat
 
+[![CI](https://github.com/garzario/ccseat/actions/workflows/ci.yml/badge.svg)](https://github.com/garzario/ccseat/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/garzario/ccseat)](https://github.com/garzario/ccseat/releases) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Use all your Claude Code accounts side by side.** See every account's usage, pick one with the arrow keys, and never log out and in again. When the account you are on hits its 5-hour or weekly limit, `claude` opens the freest one instead.
 
 <p align="center">
@@ -49,7 +51,11 @@ curl -fsSL https://raw.githubusercontent.com/garzario/ccseat/main/install.sh | b
 
 ### Homebrew
 
-Coming soon, with the first tagged release.
+```sh
+brew tap garzario/ccseat https://github.com/garzario/ccseat
+brew install ccseat
+ccseat setup        # adds the shell integration (asks first)
+```
 
 ### From a clone
 
