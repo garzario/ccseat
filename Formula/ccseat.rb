@@ -6,9 +6,7 @@ class Ccseat < Formula
   desc "Use several Claude Code accounts side by side, one seat per account"
   homepage "https://github.com/garzario/ccseat"
   url "https://github.com/garzario/ccseat/archive/refs/tags/v0.1.0.tar.gz"
-  # TODO: replace with the checksum of the v0.1.0 tarball once the tag exists:
-  #   curl -fsSL https://github.com/garzario/ccseat/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "f629151d45e4d4940731449a3961addf4b91ae7ca5da01625b11c5a6b2c5c4aa"
   license "MIT"
   head "https://github.com/garzario/ccseat.git", branch: "main"
 
