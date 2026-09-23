@@ -770,7 +770,7 @@ ccseat_registry_load() {
     n=${line%%"$CCSEAT_TAB"*}
     d=${line#*"$CCSEAT_TAB"}
     d=${d%%"$CCSEAT_TAB"*}
-    [ -n "$n" ] && [ -n "$d" ] || continue
+    { [ -n "$n" ] && [ -n "$d" ]; } || continue
     ccseat__index_of_name "$n" >/dev/null && continue
     CCSEAT_NAMES[CCSEAT_N]=$n
     CCSEAT_DIRS[CCSEAT_N]=$(ccseat_strip_slash "$d")

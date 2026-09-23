@@ -66,6 +66,7 @@ esac
 
 # Sets the clock and the projects roots once, in the calling shell.
 # $1 = current epoch seconds when the caller already has it.
+# shellcheck disable=SC2120 # the arguments are optional
 _ccseat_pg_init() {
   local r real seen=$'\n' a b
   _CCSEAT_PG_NOW=${1:-$(date +%s)}

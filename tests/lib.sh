@@ -57,16 +57,18 @@ sandbox_setup() {
   cd "$T" || exit 1
 }
 
-# System folders plus the folders of the tools the suite needs, so nothing
-# from the developer's own ~/bin or ~/.local/bin leaks into a test.
+# The folders of the tools the suite needs, then the system folders, so nothing
+# from the developer's own ~/bin or ~/.local/bin leaks into a test. Tool folders
+# come first so the same tool the developer (or CI) chose wins over an older
+# copy in /usr/bin, like the shellcheck Ubuntu ships.
 sandbox_base_path() {
-  local p="/usr/bin:/bin:/usr/sbin:/sbin" tool d
+  local sys="/usr/bin:/bin:/usr/sbin:/sbin" p="" tool d
   for tool in jq git zsh fish make shellcheck shasum sha256sum script pgrep perl; do
     d=$(PATH="${CCSEAT_TEST_ORIG_PATH:-$PATH}" command -v "$tool" 2>/dev/null) || continue
     d=$(dirname "$d")
-    case ":$p:" in *":$d:"*) ;; *) p="$p:$d" ;; esac
+    case ":$p:$sys:" in *":$d:"*) ;; *) p="$p${p:+:}$d" ;; esac
   done
-  printf '%s' "$p"
+  printf '%s' "$p${p:+:}$sys"
 }
 
 # ---------- running commands ----------
@@ -477,7 +479,7 @@ path_without() {
       [ -d "$d" ] || continue
       for f in "$d"/*; do
         b=${f##*/}
-        [ -x "$f" ] && [ ! -d "$f" ] || continue
+        { [ -x "$f" ] && [ ! -d "$f" ]; } || continue
         [ -e "$farm/$b" ] || [ -L "$farm/$b" ] && continue
         skip_it=0
         for t in "$@"; do [ "$b" = "$t" ] && skip_it=1; done

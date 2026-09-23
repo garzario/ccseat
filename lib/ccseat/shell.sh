@@ -208,6 +208,7 @@ ccseat_cmd_complete() {
 
 # ---------- setup ----------
 
+# shellcheck disable=SC2120 # the arguments are optional
 ccseat__detect_shell() {
   local s="${1:-${SHELL:-}}"
   s=${s##*/}
@@ -474,7 +475,7 @@ ccseat_cmd_uninstall() {
       printf 'ccseat was installed with Homebrew. Finish with: brew uninstall ccseat\n' ;;
     *)
       for p in "$inv" "$CCSEAT_USER_HOME/.local/bin/ccseat" "$(type -P ccseat 2>/dev/null)"; do
-        [ -n "$p" ] && [ -L "$p" ] || continue
+        { [ -n "$p" ] && [ -L "$p" ]; } || continue
         [ "$(ccseat_realpath "$p")" = "${CCSEAT_SELF:-}" ] || continue
         rm -f "$p" 2>/dev/null && printf 'Removed %s.\n' "$(ccseat_tilde "$p")"
       done

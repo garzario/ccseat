@@ -35,7 +35,7 @@ not_found() {
 
 case "$cmd" in
   find-generic-password)
-    [ -n "$service" ] && [ -f "$kc/$service" ] || not_found
+    { [ -n "$service" ] && [ -f "$kc/$service" ]; } || not_found
     if [ "$show" -eq 1 ]; then
       cat "$kc/$service"
     else
@@ -47,7 +47,7 @@ case "$cmd" in
     printf '%s' "$data" > "$kc/$service"
     exit 0 ;;
   delete-generic-password)
-    [ -n "$service" ] && [ -f "$kc/$service" ] || not_found
+    { [ -n "$service" ] && [ -f "$kc/$service" ]; } || not_found
     rm -f "$kc/$service"
     exit 0 ;;
   *)

@@ -11,6 +11,7 @@ CCSEAT_MERGEABLE="skills agents commands rules hooks output-styles projects file
 
 # With no seats registered, the user's existing login (~/.claude) becomes the
 # primary seat. Prints a one-time notice on stderr unless $1=quiet.
+# shellcheck disable=SC2120 # the arguments are optional
 ccseat_first_run() {
   local mode="${1:-}" e n first others
   ccseat__registry_ensure
@@ -765,7 +766,7 @@ ccseat_cmd_rename() {
     esac
     shift
   done
-  [ -n "$ref" ] && [ -n "$new" ] || ccseat_die_usage "usage: ccseat rename <seat> <new name>" rename
+  { [ -n "$ref" ] && [ -n "$new" ]; } || ccseat_die_usage "usage: ccseat rename <seat> <new name>" rename
   ccseat_need_jq
   ccseat_resolve_seat "$ref" || exit 1
   old=$CCSEAT_R_NAME

@@ -523,9 +523,9 @@ EOF
   best=""; best_use=101
   if [ -n "$trig" ]; then
     while IFS=$'\t' read -r n d; do
-      [ -n "$n" ] && [ "$n" != "$seat" ] || continue
+      { [ -n "$n" ] && [ "$n" != "$seat" ]; } || continue
       oc=$(ccseat_usage_cache_path "$n" 2>/dev/null); oc=${oc%%$'\n'*}
-      [ -n "$oc" ] && [ -f "$oc" ] || continue
+      { [ -n "$oc" ] && [ -f "$oc" ]; } || continue
       [ "$(_ccseat_sl_age "$oc")" -lt 86400 ] || continue
       use=$(_ccseat_sl_cache_use "$oc")
       case "$use" in ''|*[!0-9]*) continue ;; esac

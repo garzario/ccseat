@@ -220,7 +220,7 @@ ccseat_claude_bin() {
   me=${CCSEAT_SELF:-}
   for cand in "$(type -P claude 2>/dev/null)" "$CCSEAT_USER_HOME/.local/bin/claude" \
     "$CCSEAT_USER_HOME/.claude/local/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do
-    [ -n "$cand" ] && [ -x "$cand" ] || continue
+    { [ -n "$cand" ] && [ -x "$cand" ]; } || continue
     c=$cand
     if [ -n "$me" ] && [ "$(ccseat_realpath "$c")" = "$me" ]; then
       continue
