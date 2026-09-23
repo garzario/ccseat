@@ -1,0 +1,43 @@
+{
+  "hook_event_name": "Status",
+  "session_id": "sess-fixture",
+  "transcript_path": "__HOME__/.claude/projects/-work-proj/sess-fixture.jsonl",
+  "cwd": "__HOME__/work/proj",
+  "model": {
+    "id": "claude-sonnet-4-5",
+    "display_name": "Sonnet 4.5"
+  },
+  "workspace": {
+    "current_dir": "__HOME__/work/proj",
+    "project_dir": "__HOME__/work/proj"
+  },
+  "version": "2.1.280",
+  "output_style": {
+    "name": "default"
+  },
+  "cost": {
+    "total_cost_usd": 0.4213,
+    "total_duration_ms": 845000,
+    "total_api_duration_ms": 123000,
+    "total_lines_added": 156,
+    "total_lines_removed": 23
+  },
+  "exceeds_200k_tokens": false,
+  "context_window": {
+    "used_percentage": 7.8,
+    "context_window_size": 200000
+  },
+  "effort": {
+    "level": "medium"
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 37.4,
+      "resets_at": "2099-01-01T17:59:59.943648+00:00"
+    },
+    "seven_day": {
+      "used_percentage": 64.6,
+      "resets_at": 4070995199
+    }
+  }
+}

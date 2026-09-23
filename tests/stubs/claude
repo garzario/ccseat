@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Fake Claude Code CLI for the test suite. It keeps its state in the same
+# files the real CLI uses, so each seat behaves like a real config dir:
+#   config dir     ${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+#   credentials    <config dir>/.credentials.json, or a Keychain fixture read
+#                  through the security stub (same service naming as Claude Code)
+#   global config  <config dir>/.claude.json (or the legacy .config.json when it
+#                  exists) when CLAUDE_CONFIG_DIR is set, else $HOME/.claude.json
+#
+#   claude auth status [--json]   {"loggedIn":..,"email":..,"configDirectory":..}
+#   claude auth login [--email E] writes credentials and oauthAccount.emailAddress
+#   claude auth logout            removes the credentials file
+#   claude --version              prints a version
+#   claude <anything else>        prints the launch environment and arguments
+#
+# Knobs: CCSEAT_STUB_LOGIN_EMAIL (account chosen in the "browser"; wins over
+# --email), CCSEAT_STUB_LOGIN_FAIL=1 (login fails), CCSEAT_STUB_LOGIN_DELAY
+# (seconds the "browser" takes), CCSEAT_STUB_DIR (logs).
+set -u
+
+stub_dir="${CCSEAT_STUB_DIR:-${TMPDIR:-/tmp}}"
+cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+while [ "${#cfg}" -gt 1 ] && [ "${cfg%/}" != "$cfg" ]; do cfg="${cfg%/}"; done
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  if [ -f "$cfg/.config.json" ]; then gc="$cfg/.config.json"; else gc="$cfg/.claude.json"; fi
+else
+  gc="$HOME/.claude.json"
+fi
+
+log() {
+  mkdir -p "$stub_dir" 2>/dev/null
+  printf '%s\n' "$*" >> "$stub_dir/claude.log" 2>/dev/null
+}
+
+sha8() {
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum -a 256 | cut -c1-8
+  else
+    printf '%s' "$1" | sha256sum | cut -c1-8
+  fi
+}
+
+keychain_service() {
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+    printf 'Claude Code-credentials-%s' "$(sha8 "$cfg")"
+  else
+    printf 'Claude Code-credentials'
+  fi
+}
+
+# Prints the credential blob of this config dir, or nothing.
+cred_blob() {
+  local f
+  f="$stub_dir/keychain/$(keychain_service)"
+  if [ -f "$f" ]; then cat "$f"; return; fi
+  [ -f "$cfg/.credentials.json" ] && cat "$cfg/.credentials.json"
+}
+
+token_for() {
+  printf 'tok-%s' "$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '-')"
+}
+
+auth_status() {
+  local token email
+  token=$(cred_blob | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+  email=$(jq -r '.oauthAccount.emailAddress // empty' "$gc" 2>/dev/null)
+  if [ -n "$token" ]; then
+    jq -n --arg email "$email" --arg dir "$cfg" '{
+      loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty",
+      email: $email, orgId: "org-test", orgName: "Test Org",
+      subscriptionType: "max", configDirectory: $dir}'
+    return 0
+  fi
+  jq -n --arg dir "$cfg" '{loggedIn: false, authMethod: "none",
+    apiProvider: "firstParty", configDirectory: $dir}'
+  return 1
+}
+
+auth_login() {
+  local email="" now exp token tmp
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --email) email="${2:-}"; shift ;;
+      --email=*) email="${1#--email=}" ;;
+    esac
+    shift
+  done
+  [ -n "${CCSEAT_STUB_LOGIN_EMAIL:-}" ] && email="$CCSEAT_STUB_LOGIN_EMAIL"
+  if [ "${CCSEAT_STUB_LOGIN_FAIL:-0}" = 1 ] || [ -z "$email" ]; then
+    echo "Login cancelled." >&2
+    return 1
+  fi
+  [ -n "${CCSEAT_STUB_LOGIN_DELAY:-}" ] && sleep "$CCSEAT_STUB_LOGIN_DELAY"
+  now=$(date +%s)
+  exp=$(( (now + 8 * 3600) * 1000 ))
+  token=$(token_for "$email")
+  mkdir -p "$cfg"
+  (
+    umask 077
+    jq -n --arg t "$token" --argjson e "$exp" '{claudeAiOauth: {
+      accessToken: $t, refreshToken: ("ref-" + $t), expiresAt: $e,
+      scopes: ["user:inference", "user:profile"], subscriptionType: "max"}}' \
+      > "$cfg/.credentials.json"
+    tmp="$gc.stub.$$"
+    if [ -f "$gc" ]; then
+      jq --arg m "$email" '.oauthAccount = ((.oauthAccount // {}) + {emailAddress: $m, accountUuid: ("uuid-" + $m)})' "$gc" > "$tmp"
+    else
+      jq -n --arg m "$email" '{oauthAccount: {emailAddress: $m, accountUuid: ("uuid-" + $m)}}' > "$tmp"
+    fi
+    mv -f "$tmp" "$gc"
+  )
+  echo "Login successful."
+}
+
+case "${1:-}" in
+  --version|-v|version)
+    log "version"
+    echo "2.1.280 (Claude Code)"
+    exit 0 ;;
+  auth)
+    sub="${2:-}"
+    if [ $# -ge 2 ]; then shift 2; else shift; fi
+    log "auth $sub $* dir=${CLAUDE_CONFIG_DIR-<unset>}"
+    case "$sub" in
+      status) auth_status; exit $? ;;
+      login) auth_login "$@"; exit $? ;;
+      logout)
+        rm -f "$cfg/.credentials.json" "$stub_dir/keychain/$(keychain_service)"
+        echo "Logged out."; exit 0 ;;
+      *) echo "stub claude: unknown auth command: $sub" >&2; exit 1 ;;
+    esac ;;
+esac
+
+log "launch dir=${CLAUDE_CONFIG_DIR-<unset>} args=$*"
+if [ -n "${CLAUDE_CONFIG_DIR+set}" ]; then
+  printf 'stub-claude: CLAUDE_CONFIG_DIR=%s\n' "$CLAUDE_CONFIG_DIR"
+  launched="$CLAUDE_CONFIG_DIR"
+else
+  printf 'stub-claude: CLAUDE_CONFIG_DIR=<unset>\n'
+  launched="<unset>"
+fi
+printf 'stub-claude: args=%s\n' "$*"
+mkdir -p "$stub_dir" 2>/dev/null
+printf '%s\t%s\n' "$launched" "$*" >> "$stub_dir/launches" 2>/dev/null
+exit 0

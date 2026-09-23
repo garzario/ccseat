@@ -1,0 +1,6 @@
+# Library files under lib/ccseat and tests/ are sourced, not run, so they have
+# no shebang: treat every file as bash.
+shell=bash
+# Follow "source" lines relative to the file that has them.
+external-sources=true
+source-path=SCRIPTDIR

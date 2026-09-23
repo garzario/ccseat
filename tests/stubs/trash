@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Fake "trash" command (macOS 15 ships /usr/bin/trash, Linux has trash-cli).
+# Moves each path into the sandbox's $HOME/.Trash so tests never reach the
+# real Trash, and logs the call to $CCSEAT_STUB_DIR/trash.log.
+set -u
+
+stub_dir="${CCSEAT_STUB_DIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$stub_dir" "$HOME/.Trash" 2>/dev/null
+status=0
+for p in "$@"; do
+  case "$p" in -*) continue ;; esac
+  printf '%s\n' "$p" >> "$stub_dir/trash.log" 2>/dev/null
+  if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+    echo "trash: $p: No such file or directory" >&2
+    status=1
+    continue
+  fi
+  name=$(basename "$p")
+  dest="$HOME/.Trash/$name"
+  [ -e "$dest" ] && dest="$dest $(date +%H.%M.%S).$$"
+  mv "$p" "$dest" || status=1
+done
+exit "$status"

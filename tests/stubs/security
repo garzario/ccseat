@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Fake macOS "security" for the test suite. The Keychain is a folder of
+# fixture files, one per service name: $CCSEAT_STUB_DIR/keychain/<service>.
+#   find-generic-password [-a acct] -s service [-w]   prints the fixture
+#   add-generic-password [-a acct] -s service -w data [-U]
+#   delete-generic-password [-a acct] -s service
+# A missing item exits 44 like the real tool. Every call is logged to
+# $CCSEAT_STUB_DIR/security.log with secrets left out.
+set -u
+
+stub_dir="${CCSEAT_STUB_DIR:-${TMPDIR:-/tmp}}"
+kc="$stub_dir/keychain"
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+service="" data="" show=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s) service="${2:-}"; shift ;;
+    -a|-l|-D|-j|-c|-C|-G|-T) shift ;;
+    -w)
+      if [ "$cmd" = add-generic-password ]; then data="${2:-}"; shift; else show=1; fi ;;
+    -g|-U) ;;
+  esac
+  shift
+done
+
+mkdir -p "$kc" 2>/dev/null
+printf '%s service=%s\n' "$cmd" "$service" >> "$stub_dir/security.log" 2>/dev/null
+
+not_found() {
+  echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." >&2
+  exit 44
+}
+
+case "$cmd" in
+  find-generic-password)
+    [ -n "$service" ] && [ -f "$kc/$service" ] || not_found
+    if [ "$show" -eq 1 ]; then
+      cat "$kc/$service"
+    else
+      printf 'keychain: "%s"\nclass: "genp"\n    "svce"<blob>="%s"\n' "$kc" "$service"
+    fi
+    exit 0 ;;
+  add-generic-password)
+    [ -n "$service" ] || exit 1
+    printf '%s' "$data" > "$kc/$service"
+    exit 0 ;;
+  delete-generic-password)
+    [ -n "$service" ] && [ -f "$kc/$service" ] || not_found
+    rm -f "$kc/$service"
+    exit 0 ;;
+  *)
+    echo "stub security: unsupported command: $cmd" >&2
+    exit 1 ;;
+esac

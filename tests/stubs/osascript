@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Fake osascript: the test suite never scripts Finder or other apps. Logs the
+# call to $CCSEAT_STUB_DIR/osascript.log and fails, so callers use their
+# fallback path.
+stub_dir="${CCSEAT_STUB_DIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$stub_dir" 2>/dev/null
+printf '%s\n' "$*" >> "$stub_dir/osascript.log" 2>/dev/null
+echo "osascript: disabled in the test suite" >&2
+exit 1

@@ -1,0 +1,407 @@
+#!/usr/bin/env bash
+# ccseat: use several Claude Code accounts side by side, one seat per account.
+# https://github.com/garzario/ccseat (MIT License)
+#
+# This file finds its library (following symlinks, so a link on PATH works),
+# loads it and runs the command. Run "ccseat help" for the commands.
+
+set -u
+# An exported CDPATH would make cd print folders and send it elsewhere.
+unset CDPATH
+
+# Real path of this script, following every symlink (no readlink -f on macOS).
+ccseat__resolve_self() {
+  local p="$1" d l n=0
+  while [ -L "$p" ] && [ "$n" -lt 40 ]; do
+    d=$(cd -P "$(dirname "$p")" 2>/dev/null && pwd) || return 1
+    l=$(readlink "$p") || return 1
+    case "$l" in /*) p=$l ;; *) p="$d/$l" ;; esac
+    n=$((n + 1))
+  done
+  d=$(cd -P "$(dirname "$p")" 2>/dev/null && pwd) || return 1
+  printf '%s/%s' "$d" "$(basename "$p")"
+}
+
+CCSEAT_INVOKED=${BASH_SOURCE[0]:-$0}
+case "$CCSEAT_INVOKED" in
+  /*) ;;
+  */*) CCSEAT_INVOKED="$(cd "$(dirname "$CCSEAT_INVOKED")" 2>/dev/null && pwd)/$(basename "$CCSEAT_INVOKED")" ;;
+  *) CCSEAT_INVOKED=$(type -P "$CCSEAT_INVOKED" 2>/dev/null || printf '%s' "$CCSEAT_INVOKED") ;;
+esac
+if ! CCSEAT_SELF=$(ccseat__resolve_self "$CCSEAT_INVOKED"); then
+  printf 'ccseat: cannot tell where ccseat is installed (%s)\n' "$CCSEAT_INVOKED" >&2
+  exit 1
+fi
+CCSEAT_ROOT=$(dirname "$(dirname "$CCSEAT_SELF")")
+export CCSEAT_SELF
+CCSEAT_LIB=$CCSEAT_ROOT/lib/ccseat
+
+for ccseat__f in core auth usage seats picker shell doctor; do
+  if ! [ -f "$CCSEAT_LIB/$ccseat__f.sh" ]; then
+    printf 'ccseat: %s is missing, so this install is incomplete.\n' "$CCSEAT_LIB/$ccseat__f.sh" >&2
+    printf '  Reinstall: curl -fsSL https://raw.githubusercontent.com/garzario/ccseat/main/install.sh | bash\n' >&2
+    exit 1
+  fi
+done
+# shellcheck source=../lib/ccseat/core.sh
+. "$CCSEAT_LIB/core.sh"
+# shellcheck source=../lib/ccseat/auth.sh
+. "$CCSEAT_LIB/auth.sh"
+# shellcheck source=../lib/ccseat/usage.sh
+. "$CCSEAT_LIB/usage.sh"
+# shellcheck source=../lib/ccseat/seats.sh
+. "$CCSEAT_LIB/seats.sh"
+# shellcheck source=../lib/ccseat/picker.sh
+. "$CCSEAT_LIB/picker.sh"
+# shellcheck source=../lib/ccseat/shell.sh
+. "$CCSEAT_LIB/shell.sh"
+# shellcheck source=../lib/ccseat/doctor.sh
+. "$CCSEAT_LIB/doctor.sh"
+# Optional parts (status line, progress): loaded when present.
+for ccseat__f in "$CCSEAT_LIB"/*.sh; do
+  case "${ccseat__f##*/}" in
+    core.sh|auth.sh|usage.sh|seats.sh|picker.sh|shell.sh|doctor.sh) continue ;;
+  esac
+  # shellcheck disable=SC1090 # optional library files, found at run time
+  [ -f "$ccseat__f" ] && . "$ccseat__f"
+done
+unset ccseat__f
+
+# ---------- help ----------
+
+ccseat_help() {
+  local topic="${1:-}"
+  case "$topic" in
+    ""|help) ccseat__help_main ;;
+    pick) cat <<'EOF'
+Usage: ccseat [pick]
+
+Shows every seat with its 5-hour and weekly usage and opens Claude Code with
+the one you choose. The cursor starts on the freest seat.
+
+  up, down, k, j   move
+  enter            open the seat
+  1 to 9           open that seat right away
+  q, Esc           cancel
+
+The chosen seat becomes the current one (turn that off with:
+ccseat config remember off). When the output is not a terminal, this prints
+ccseat list instead.
+EOF
+    ;;
+    list|ls) cat <<'EOF'
+Usage: ccseat list [--json]
+
+Every seat with its number, 5-hour and weekly usage, when each resets, and a
+status: live, how old the numbers are, at its 5-hour or weekly limit,
+offline, not logged in, or idle (its login renews the next time it opens).
+The current seat is marked with ❯. In a narrow terminal each seat takes a
+few lines instead of one row.
+
+  --json   the same as JSON, for scripts (emails, folders, percents, resets)
+EOF
+    ;;
+    run) cat <<'EOF'
+Usage: ccseat run <seat> [claude arguments]
+
+Opens Claude Code with a seat, once, without changing the current seat. Any
+other arguments go to claude as they are.
+
+Examples:
+  ccseat run bob
+  ccseat run 2 --resume
+  ccseat run bob -p "summarize the README"
+EOF
+    ;;
+    use|switch) cat <<'EOF'
+Usage: ccseat use <seat>
+
+Makes a seat the current one, without opening it. The claude command (with
+the shell integration) and the status line use the current seat.
+EOF
+    ;;
+    current) cat <<'EOF'
+Usage: ccseat current [--dir]
+
+Prints the name of the current seat, or with --dir its config folder.
+EOF
+    ;;
+    add) cat <<'EOF'
+Usage: ccseat add [--email EMAIL] [--name NAME] [--dir FOLDER]
+
+Signs in to another Claude account and adds it as a seat. Your browser opens
+for the login: sign in with the account you want to add.
+
+The seat is named after the part of its email before the @, so
+bob@example.com becomes bob, and a second bob becomes bob-2. Rename it any
+time with ccseat rename.
+
+  --email EMAIL   fill in this email on the login page (or: ccseat add EMAIL)
+  --name NAME     choose the seat's name yourself
+  --dir FOLDER    use an existing Claude Code config folder instead of a new
+                  one, for example one you opened with CLAUDE_CONFIG_DIR; if it
+                  is already logged in, no login is needed
+
+Every seat shares settings.json, CLAUDE.md, skills, agents, commands, rules,
+hooks, output styles, plugins, projects (conversations and memory), file
+history (rewind checkpoints), plans, todos and the prompt history with
+~/.claude. Logins, sessions and caches stay separate. MCP servers and trusted
+folders are copied from ~/.claude.
+
+With no seats yet and ~/.claude not logged in, the first account signs in to
+~/.claude itself, so plain claude and editors use it too.
+
+Examples:
+  ccseat add
+  ccseat add bob@example.com
+  ccseat add --dir ~/.claude-work
+EOF
+    ;;
+    remove|rm) cat <<'EOF'
+Usage: ccseat remove <seat> [--keep-files] [-y]
+
+Removes a seat: signs it out and moves its folder to the Trash (nothing is
+deleted). The primary seat (~/.claude) is never removed.
+
+  --keep-files   keep the folder and its login where they are
+  -y, --yes      do not ask for confirmation
+EOF
+    ;;
+    rename|mv) cat <<'EOF'
+Usage: ccseat rename <seat> <new name>
+
+Renames a seat. Names use lowercase letters, digits, dots, dashes and
+underscores. The folder stays where it is, so the login keeps working.
+EOF
+    ;;
+    sync) cat <<'EOF'
+Usage: ccseat sync [seat]
+
+Brings every seat (or one) up to date with ~/.claude: repairs the shared
+links, copies the MCP servers and marks the same folders as trusted. It also
+runs silently every time a seat opens. MCP servers a seat added on its own
+are kept.
+EOF
+    ;;
+    usage) cat <<'EOF'
+Usage: ccseat usage [seat] [--refresh] [--json] [--all]
+
+The 5-hour and weekly usage of a seat (the current one by default) as bars,
+with the time each window resets, plus any weekly limit of a single model
+(for example "Opus weekly") from the last usage answer of the past 6 hours.
+Numbers under a minute old come from the cache. Switching seats at a limit
+looks at the 5-hour and weekly limits only.
+
+  --refresh   fetch now (without a seat: fetch every seat)
+  --all       show every seat
+  --json      print JSON
+EOF
+    ;;
+    claude) cat <<'EOF'
+Usage: ccseat claude [claude arguments]
+
+What the claude shell function runs. It opens Claude Code with the current
+seat. When auto_switch is on and that seat is at its limit (5-hour usage at
+limit_5h or weekly usage at limit_weekly), it opens the freest seat instead
+and says so in one line. It never waits more than about 1.5 seconds for
+usage data.
+
+A CLAUDE_CONFIG_DIR you set yourself wins over the current seat: a seat's
+folder opens that seat, and any other folder opens exactly as asked. So
+CLAUDE_CONFIG_DIR=~/.claude-work claude keeps working.
+
+"claude mcp add|add-json|remove --scope user" changes ~/.claude, which every
+seat copies, and syncs every seat right away.
+
+Set CCSEAT_NO_WRAP=1 to make the claude command skip ccseat, or run
+"command claude".
+EOF
+    ;;
+    init) cat <<'EOF'
+Usage: ccseat init <zsh|bash|fish>
+
+Prints the shell integration: a claude function that goes through ccseat (only
+in interactive shells), cs as a short name for ccseat, and completions.
+
+  zsh    eval "$(ccseat init zsh)"      in ~/.zshrc
+  bash   eval "$(ccseat init bash)"     in ~/.bashrc or ~/.bash_profile
+  fish   ccseat init fish | source      in ~/.config/fish/config.fish
+
+ccseat setup adds the right line for you.
+EOF
+    ;;
+    setup) cat <<'EOF'
+Usage: ccseat setup [zsh|bash|fish] [--statusline | --no-statusline] [-y]
+
+Adds the shell integration to your shell startup file (once), makes your
+current Claude Code login the first seat, and offers the status line.
+
+  --statusline      install the status line without asking
+  --no-statusline   leave the status line alone
+  -y, --yes         answer yes to questions
+EOF
+    ;;
+    statusline)
+      # One source of help text: the status line's own.
+      if declare -F ccseat_statusline_main >/dev/null 2>&1; then ccseat_statusline_main --help
+      else printf 'Usage: ccseat statusline [install | uninstall]\n'; fi ;;
+    progress)
+      if declare -F ccseat_progress_main >/dev/null 2>&1; then ccseat_progress_main --help
+      else printf 'Usage: ccseat progress [--line | --tsv | --agents]\n'; fi ;;
+    doctor) cat <<'EOF'
+Usage: ccseat doctor
+
+Checks the tools ccseat needs, every seat (login, shared links, MCP servers),
+the shell integration and the status line, and prints the fix for anything
+that is off. It changes nothing except refreshing the usage cache.
+EOF
+    ;;
+    config) cat <<'EOF'
+Usage: ccseat config [setting [value]]
+
+Without arguments, prints every setting. With a setting, prints its value.
+With a value, changes it ("default" puts the default back).
+
+  auto_switch    on      switch to the freest seat when the current one is at
+                         its limit
+  limit_5h       95      5-hour usage (percent) that counts as the limit
+  limit_weekly   100     weekly usage (percent) that counts as the limit
+  remember       on      the seat chosen in the picker becomes the current seat
+  share          (list)  what every seat shares with ~/.claude, separated by
+                         commas; the default is settings.json, CLAUDE.md,
+                         skills, agents, commands, rules, hooks,
+                         output-styles, plugins, projects, file-history,
+                         plans, todos and history.jsonl
+  colors         auto    auto, always or never (NO_COLOR is respected)
+
+Examples:
+  ccseat config limit_5h 90
+  ccseat config share default
+EOF
+    ;;
+    uninstall) cat <<'EOF'
+Usage: ccseat uninstall [--purge] [-y]
+
+Removes the shell integration, the status line (if it points at ccseat) and
+the program. Seats, their logins and ~/.claude stay.
+
+  --purge   also sign out every seat except ~/.claude and move the seat
+            folders and ccseat's settings and cache to the Trash
+  -y        do not ask for confirmation
+EOF
+    ;;
+    version) printf 'Usage: ccseat version (also --version or -v)\n\nPrints the version of ccseat.\n' ;;
+    *)
+      ccseat_err "no help for \"$topic\"" "Run: ccseat help"
+      return 2 ;;
+  esac
+  return 0
+}
+
+ccseat__help_main() {
+  cat <<EOF
+ccseat $CCSEAT_VERSION
+Use several Claude Code accounts side by side. Each account is a seat with its
+own login and usage limits; settings, skills, memory and conversations are
+shared by all of them.
+
+Usage: ccseat [command] [arguments]
+
+Everyday
+  ccseat                        choose a seat with the arrow keys and open it
+  claude                        opens the current seat and switches seats at a
+                                limit (after ccseat setup)
+  ccseat run <seat> [args]      open Claude Code with a seat
+  ccseat list [--json]          every seat with its 5-hour and weekly usage
+  ccseat usage [seat]           usage bars for a seat (--refresh, --all, --json)
+
+Seats
+  ccseat add [email]            sign in to another account and add it as a seat
+  ccseat use <seat>             make a seat the current one
+  ccseat current                print the current seat
+  ccseat rename <seat> <new>    rename a seat
+  ccseat remove <seat>          remove a seat (its folder goes to the Trash)
+  ccseat sync [seat]            copy MCP servers and trusted folders to seats
+
+Setup
+  ccseat setup                  add the shell integration to your shell
+  ccseat init <shell>           print the shell integration (zsh, bash, fish)
+  ccseat statusline install     show the seat and usage in Claude Code
+  ccseat progress               workflow and agent progress for the status line
+  ccseat doctor                 check everything and print fixes
+  ccseat config [key [value]]   read or change settings
+  ccseat uninstall [--purge]    remove ccseat (seats stay unless --purge)
+  ccseat version                print the version
+
+A seat can be given by name, by the start of its name, or by its number in
+ccseat list. For more about a command: ccseat help <command>
+EOF
+}
+
+# ---------- dispatch ----------
+
+ccseat__need_optional() {
+  if ! declare -F "$1" >/dev/null 2>&1; then
+    ccseat_die "this install has no $2 support (lib/ccseat/$2.sh is missing)" \
+      "Reinstall: curl -fsSL https://raw.githubusercontent.com/garzario/ccseat/main/install.sh | bash"
+  fi
+}
+
+ccseat_main() {
+  local cmd="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$cmd" in
+    version|--version|-v|-V) printf 'ccseat %s\n' "$CCSEAT_VERSION"; return 0 ;;
+    help|-h|--help) ccseat_help "${1:-}"; return $? ;;
+    init) ccseat_cmd_init "$@"; return $? ;;
+    __complete) ccseat_cmd_complete "$@"; return $? ;;
+    config) ccseat_cmd_config "$@"; return $? ;;
+    statusline)
+      ccseat__need_optional ccseat_statusline_main statusline
+      ccseat_statusline_main "$@"
+      return $? ;;
+    progress)
+      ccseat__need_optional ccseat_progress_main progress
+      ccseat_progress_main "$@"
+      return $? ;;
+    claude) ccseat_cmd_claude "$@"; return $? ;;
+  esac
+  case "$cmd" in
+    ""|pick|list|ls|use|switch|current|run|add|remove|rm|rename|mv|sync|usage|doctor|setup|uninstall) ;;
+    -*)
+      ccseat_die_usage "unknown option: $cmd" ;;
+    *)
+      # "ccseat bob" opens the seat bob.
+      ccseat__registry_ensure
+      if ccseat__index_of_name "$cmd" >/dev/null; then
+        ccseat_first_run quiet
+        ccseat_cmd_run "$cmd" "$@"
+        return $?
+      fi
+      ccseat_err "unknown command: $cmd" "Run: ccseat help   (to open a seat: ccseat run <seat>)"
+      return 2 ;;
+  esac
+  command -v jq >/dev/null 2>&1 && ccseat_first_run
+  case "$cmd" in
+    ""|pick) ccseat_cmd_pick "$@" ;;
+    list|ls) ccseat_cmd_list "$@" ;;
+    use|switch) ccseat_cmd_use "$@" ;;
+    current) ccseat_cmd_current "$@" ;;
+    run) ccseat_cmd_run "$@" ;;
+    add) ccseat_cmd_add "$@" ;;
+    remove|rm) ccseat_cmd_remove "$@" ;;
+    rename|mv) ccseat_cmd_rename "$@" ;;
+    sync) ccseat_cmd_sync "$@" ;;
+    usage) ccseat_cmd_usage "$@" ;;
+    doctor) ccseat_cmd_doctor "$@" ;;
+    setup) ccseat_cmd_setup "$@" ;;
+    uninstall) ccseat_cmd_uninstall "$@" ;;
+  esac
+}
+
+ccseat__utf8_init
+ccseat_init_paths
+ccseat_config_load
+ccseat__palette
+ccseat_main "$@"
+exit $?

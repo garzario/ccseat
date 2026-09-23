@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Fake curl for the test suite. It never touches the network.
+#   .../api/oauth/usage   answers with $CCSEAT_STUB_DIR/usage/<token>.json, where
+#                         <token> is the bearer token from the config read on
+#                         stdin (-K -) or from a -H header; 401 when there is
+#                         no fixture for that token
+#   file://<path>         copies the file (used by the installer tests)
+#   anything else         fails like an unreachable host
+# Failure and delay modes: CCSEAT_STUB_CURL_FAIL=1 or a file
+# $CCSEAT_STUB_DIR/curl_fail (exit 28, timeout); CCSEAT_STUB_CURL_DELAY=<s> or a
+# file $CCSEAT_STUB_DIR/curl_delay holding seconds (sleeps first).
+# Logs: curl.args gets the command line of every call (so tests can check a
+# token never shows up there), curl.tokens the token each usage call used.
+set -u
+
+stub_dir="${CCSEAT_STUB_DIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$stub_dir" 2>/dev/null
+printf '%s\n' "$*" >> "$stub_dir/curl.args" 2>/dev/null
+
+url="" out="" wfmt="" fail_flag=0 config_stdin=0 token=""
+bearer() { printf '%s' "$1" | sed -n 's/.*[Aa]uthorization: *[Bb]earer *\([^" ]*\).*/\1/p' | head -1; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -K|--config) [ "${2:-}" = - ] && config_stdin=1; shift ;;
+    -K-) config_stdin=1 ;;
+    -o|--output) out="${2:-}"; shift ;;
+    -w|--write-out) wfmt="${2:-}"; shift ;;
+    -H|--header)
+      t=$(bearer "${2:-}"); [ -n "$t" ] && token="$t"; shift ;;
+    -m|--max-time|--connect-timeout|-X|--request|-d|--data|-A|--user-agent|-e|--referer|-u|--user|--retry|--retry-delay|--retry-max-time|-x|--proxy)
+      shift ;;
+    --fail|--fail-with-body) fail_flag=1 ;;
+    --*) ;;
+    -*)
+      case "$1" in *f*) fail_flag=1 ;; esac ;;
+    *) [ -z "$url" ] && url="$1" ;;
+  esac
+  shift
+done
+
+if [ "$config_stdin" -eq 1 ]; then
+  t=$(bearer "$(cat)")
+  [ -n "$t" ] && token="$t"
+fi
+
+emit() {
+  # $1 = body file or "-" for a literal in $2
+  if [ -n "$out" ] && [ "$out" != - ]; then
+    if [ "$1" = - ]; then printf '%s' "$2" > "$out"; else cat "$1" > "$out"; fi
+  else
+    if [ "$1" = - ]; then printf '%s' "$2"; else cat "$1"; fi
+  fi
+}
+
+# -w output, with the \n, \r and \t escapes curl understands.
+write_out() {
+  [ -n "$wfmt" ] || return 0
+  printf '%b' "$(printf '%s' "$wfmt" | sed "s/%{http_code}/$1/g; s/%{response_code}/$1/g")"
+}
+
+case "$url" in
+  file://*)
+    path="${url#file://}"
+    if [ ! -f "$path" ]; then
+      echo "curl: (37) Couldn't open file $path" >&2
+      exit 37
+    fi
+    emit "$path"
+    write_out 200
+    exit 0 ;;
+  *api/oauth/usage*)
+    printf '%s\n' "${token:-<none>}" >> "$stub_dir/curl.tokens" 2>/dev/null
+    delay="${CCSEAT_STUB_CURL_DELAY:-}"
+    [ -z "$delay" ] && [ -f "$stub_dir/curl_delay" ] && delay=$(cat "$stub_dir/curl_delay")
+    [ -n "$delay" ] && sleep "$delay"
+    if [ "${CCSEAT_STUB_CURL_FAIL:-0}" = 1 ] || [ -f "$stub_dir/curl_fail" ]; then
+      echo "curl: (28) Operation timed out after 5000 milliseconds with 0 bytes received" >&2
+      exit 28
+    fi
+    fixture="$stub_dir/usage/$token.json"
+    if [ -n "$token" ] && [ -f "$fixture" ]; then
+      emit "$fixture"
+      write_out 200
+      exit 0
+    fi
+    if [ "$fail_flag" -eq 1 ]; then
+      echo "curl: (22) The requested URL returned error: 401" >&2
+      exit 22
+    fi
+    emit - '{"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired or is invalid"}}'
+    write_out 401
+    exit 0 ;;
+  *)
+    echo "curl: (6) Could not resolve host (the test suite has no network): $url" >&2
+    exit 6 ;;
+esac

@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # One shellcheck version everywhere, so lint results match local runs.
+  SHELLCHECK_VERSION: v0.11.0
+
+jobs:
+  lint:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | tar -xJ
+          sudo install "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+      - name: Lint
+        run: make lint
+
+  test:
+    name: tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq zsh fish
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | tar -xJ
+          sudo install "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          command -v jq >/dev/null || brew install jq
+          brew install fish shellcheck || true
+      - name: Versions
+        run: |
+          bash --version | head -n 1
+          /bin/bash --version | head -n 1
+          jq --version
+          zsh --version || true
+          fish --version || true
+          shellcheck --version || true
+      - name: Test
+        env:
+          # macOS runs everything with the system bash 3.2.
+          CCSEAT_TEST_BASH: ${{ runner.os == 'macOS' && '/bin/bash' || '' }}
+        run: /bin/bash tests/run.sh -j 4
