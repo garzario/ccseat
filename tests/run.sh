@@ -138,17 +138,21 @@ start_test() {
       "$fn"
     ) </dev/null >"$tdir/log" 2>&1 &
     local pid=$!
+    # Watchdog: marks the test as timed out only if it is still running, so a
+    # watchdog that outlives a finished test (the kill below can race with it
+    # on Linux) never turns a pass into a timeout.
     (
       sleep "$timeout"
-      : > "$tdir/timeout"
-      dump_tree "$pid" > "$tdir/tree" 2>/dev/null
-      kill_tree "$pid"
+      if kill -0 "$pid" 2>/dev/null; then
+        : > "$tdir/timeout"
+        dump_tree "$pid" > "$tdir/tree" 2>/dev/null
+        kill_tree "$pid"
+      fi
     ) </dev/null >/dev/null 2>&1 &
     local wd=$!
     wait "$pid"
     local rc=$?
     kill_tree "$wd"
-    wait "$wd" 2>/dev/null
     printf '%s\n' "$rc" > "$tdir/rc.tmp" && mv "$tdir/rc.tmp" "$tdir/rc"
   ) &
 }
