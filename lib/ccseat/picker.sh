@@ -11,11 +11,12 @@ ccseat__pick_restore() {
   return 0
 }
 
+# Ctrl-C (or TERM, HUP) only sets a flag: the key loop sees it, leaves, and
+# restores the terminal on the normal way out. Exiting from inside the trap
+# let bash 5 put back the echo-off state of the interrupted read afterwards,
+# so the shell came back without echo.
 ccseat__pick_abort() {
-  trap - INT TERM HUP WINCH
-  ccseat__pick_restore
-  ccseat__pick_jobs_clean
-  exit 130
+  CCSEAT__PICK_ABORT=1
 }
 
 # One usage row of a seat, fitted to the terminal width. $6=1 when this
@@ -425,6 +426,7 @@ ccseat_cmd_pick() {
   # pressed while a frame is being drawn are never printed on screen (read -s
   # only hides what arrives during the read itself).
   stty -echo -icanon min 1 time 0 2>/dev/null
+  CCSEAT__PICK_ABORT=0
   trap ccseat__pick_abort INT TERM HUP
   trap 'CCSEAT__PICK_RESIZED=1 CCSEAT__PICK_SIZED=0 CCSEAT__PICK_HINT_SHORT=""' WINCH
   printf '\033[?1049h\033[?25l'
@@ -436,6 +438,7 @@ ccseat_cmd_pick() {
     t0=$SECONDS
     IFS= read -rsn1 -t 1 key
     rc=$?
+    if [ "$CCSEAT__PICK_ABORT" = 1 ]; then chosen=""; break; fi
     draw=0
     if [ "$CCSEAT__PICK_RESIZED" = 1 ]; then
       CCSEAT__PICK_RESIZED=0

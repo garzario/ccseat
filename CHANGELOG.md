@@ -6,6 +6,14 @@ All notable changes to ccseat are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-23
+
+### Fixed
+
+- On Linux, leaving the picker with Ctrl-C no longer leaves the terminal
+  without echo. Ctrl-C now leaves through the picker's normal exit, which
+  always restores the terminal.
+
 ## [0.2.1] - 2026-09-23
 
 ### Fixed
@@ -158,7 +166,8 @@ First release.
   test suite that runs on macOS (bash 3.2) and Linux with stubbed `claude`,
   `curl` and Keychain.
 
-[Unreleased]: https://github.com/garzario/ccseat/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/garzario/ccseat/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/garzario/ccseat/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/garzario/ccseat/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/garzario/ccseat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/garzario/ccseat/releases/tag/v0.1.0
