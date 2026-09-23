@@ -6,6 +6,11 @@ All notable changes to ccseat are listed here. The format follows
 
 ## [Unreleased]
 
+### Documentation
+
+- How Remote Control works with seats: each seat links its sessions to its
+  own account.
+
 ## [0.2.2] - 2026-09-23
 
 ### Fixed

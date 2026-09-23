@@ -241,3 +241,9 @@ The branch and the `*` come from `git status` in the folder Claude Code works in
 ## Workflow and agent progress
 
 `ccseat progress` lists the workflows and agents still running in a Claude Code session: a readable summary by default, `--line` for one compact line, and `--tsv` or `--agents` for scripts. The status line uses it for its `running` row. It reads Claude Code's own session files and changes nothing.
+
+## Remote Control
+
+Remote Control (`/remote-control` in Claude Code, or `remoteControlAtStartup` in settings) works in every seat, and each seat keeps it on its own account: a session you open from a seat is linked to that seat's login, so it shows up in the Claude app or on claude.ai when you are signed in there with that same account. To follow a session from another seat on your phone, sign in to the app with that seat's account.
+
+The `remoteControlAtStartup` setting lives in the shared `settings.json`, so turning it on applies to every seat, and each one registers its sessions with its own account.

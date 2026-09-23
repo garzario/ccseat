@@ -40,6 +40,10 @@ No. Add one seat per account. When they do not fit in the terminal, the picker s
 
 Yes. Conversations are shared, so `claude --resume` (or `ccseat run work --resume`) in the same folder lists the sessions of every seat.
 
+## Does Remote Control work with seats?
+
+Yes, and each seat keeps its own account. A session opened from a seat is linked to that seat's login, so it appears in the Claude app when you are signed in with that account. See [Remote Control](usage.md#remote-control).
+
 ## Can I keep a seat isolated?
 
 What is shared is the same for every seat. To share less, shorten the list; ccseat removes the links it made for the rest, and `ccseat config share default` brings them back:
