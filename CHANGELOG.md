@@ -6,6 +6,17 @@ All notable changes to ccseat are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-23
+
+### Fixed
+
+- The picker no longer lags when you hold or tap the arrow keys quickly.
+  Each seat is drawn once per layout and moving the cursor only repaints
+  the cached lines, in a single write, without clearing the screen first.
+- Arrow keys pressed while a frame was being drawn no longer print their
+  escape characters (`^[[A`) on screen: echo stays off while the picker is
+  open.
+
 ## [0.2.0] - 2026-09-22
 
 This release gives ccseat a shorter command, `cc`, makes a seat that is out
@@ -147,6 +158,7 @@ First release.
   test suite that runs on macOS (bash 3.2) and Linux with stubbed `claude`,
   `curl` and Keychain.
 
-[Unreleased]: https://github.com/garzario/ccseat/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/garzario/ccseat/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/garzario/ccseat/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/garzario/ccseat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/garzario/ccseat/releases/tag/v0.1.0

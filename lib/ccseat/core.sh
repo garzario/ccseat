@@ -11,7 +11,7 @@
 #   ccseat_seat_for_dir <dir>    registered name of a config dir (primary when empty)
 #   ccseat_seat_color <name>     the seat's accent color escape
 
-CCSEAT_VERSION="0.2.0"
+CCSEAT_VERSION="0.2.1"
 
 CCSEAT_DEFAULT_SHARE="settings.json,CLAUDE.md,skills,agents,commands,rules,hooks,output-styles,plugins,projects,file-history,plans,todos,history.jsonl"
 # Per-account state that is never linked between seats, whatever "share" says.

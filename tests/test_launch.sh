@@ -528,7 +528,7 @@ seat_out_fixture() {
 
 # The text of a picker frame (1 is the first drawing), escape codes and all.
 nth_frame() {
-  local rest="$1" n="$2" k=0 sep=$'\033[H\033[J'
+  local rest="$1" n="$2" k=0 sep=$'\033[H'
   while [ "$k" -lt "$n" ]; do
     case "$rest" in *"$sep"*) rest=${rest#*"$sep"} ;; *) return 1 ;; esac
     k=$((k + 1))

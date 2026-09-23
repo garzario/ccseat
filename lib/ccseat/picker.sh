@@ -53,11 +53,12 @@ ccseat__pick_no_data() {
   [ "${CCSEAT_ROW_P5[$1]}" = - ] && [ "${CCSEAT_ROW_P7[$1]}" = - ]
 }
 
-# Lines a seat takes on screen (without the blank line between seats).
-ccseat__pick_height() {
-  if [ "$CCSEAT__PICK_COMPACT" = 1 ]; then printf 1
-  elif [ "${CCSEAT_ROW_AUTH[$1]}" = none ] || ccseat__pick_no_data "$1"; then printf 2
-  else printf 3; fi
+# Lines a seat takes on screen (without the blank line between seats),
+# in CCSEAT__PICK_HV, so the draw loop needs no subshell.
+ccseat__pick_height_v() {
+  if [ "$CCSEAT__PICK_COMPACT" = 1 ]; then CCSEAT__PICK_HV=1
+  elif [ "${CCSEAT_ROW_AUTH[$1]}" = none ] || ccseat__pick_no_data "$1"; then CCSEAT__PICK_HV=2
+  else CCSEAT__PICK_HV=3; fi
 }
 
 # The highest weekly limit of a single model, as "name|percent", when it is
@@ -206,7 +207,7 @@ ccseat__pick_window() {
     i=$CCSEAT__PICK_OFF
     CCSEAT__PICK_END=$((i - 1))
     while [ "$i" -lt "$CCSEAT_N" ]; do
-      h=$(ccseat__pick_height "$i")
+      h=${CCSEAT__PICK_H[i]}
       [ "$i" -gt "$CCSEAT__PICK_OFF" ] && [ "$CCSEAT__PICK_COMPACT" = 0 ] && h=$((h + 1))
       [ $((used + h)) -le "$avail" ] || break
       used=$((used + h))
@@ -236,17 +237,36 @@ ccseat__pick_question() {
     "$CCSEAT_C_BOLD" "$CCSEAT_C_TEXT" "$q" "$CCSEAT_C_RESET"
 }
 
+# Seat lines are rendered once per layout (width, layout, current seat,
+# data) for both states, selected and not, so moving the cursor only
+# reassembles cached strings: no subshells, no date calls, no flicker.
+ccseat__pick_cache() {
+  local cols="$1" cur="$2" i
+  CCSEAT__PICK_CACHE_KEY="$cols|$CCSEAT__PICK_COMPACT|${CCSEAT__PICK_NAMEW:-0}|$cur|$CCSEAT__PICK_GEN"
+  i=0
+  while [ "$i" -lt "$CCSEAT_N" ]; do
+    CCSEAT__PICK_SEL[i]=$(ccseat__pick_seat_lines "$i" "$i" "$cols" "$cur")
+    CCSEAT__PICK_UNSEL[i]=$(ccseat__pick_seat_lines "$i" -1 "$cols" "$cur")
+    i=$((i + 1))
+  done
+}
+
 ccseat__pick_draw() {
-  local sel="$1" busy="$2" cur="$3" ask="${4:-}" cols lines avail total i out title hint n
-  ccseat__term_size
-  cols=$CCSEAT__TERM_COLS
-  lines=$CCSEAT__TERM_ROWS
+  local sel="$1" busy="$2" cur="$3" ask="${4:-}" cols lines avail total i out title hint n nl=$'\n'
+  # The size is read once, and again only after a resize (SIGWINCH).
+  if [ "${CCSEAT__PICK_SIZED:-0}" != 1 ]; then
+    ccseat__term_size
+    CCSEAT__PICK_COLS=$CCSEAT__TERM_COLS CCSEAT__PICK_ROWS=$CCSEAT__TERM_ROWS CCSEAT__PICK_SIZED=1
+  fi
+  cols=$CCSEAT__PICK_COLS
+  lines=$CCSEAT__PICK_ROWS
   # Full layout when it fits, else one line per seat.
   CCSEAT__PICK_COMPACT=0
   total=0
   i=0
   while [ "$i" -lt "$CCSEAT_N" ]; do
-    total=$((total + $(ccseat__pick_height "$i") + 1))
+    ccseat__pick_height_v "$i"
+    total=$((total + CCSEAT__PICK_HV + 1))
     i=$((i + 1))
   done
   [ $((total + 3)) -gt "$lines" ] && CCSEAT__PICK_COMPACT=1
@@ -264,6 +284,15 @@ ccseat__pick_draw() {
     [ "$CCSEAT__PICK_NAMEW" -gt $((cols - 15)) ] && CCSEAT__PICK_NAMEW=$((cols - 15))
     [ "$CCSEAT__PICK_NAMEW" -lt 1 ] && CCSEAT__PICK_NAMEW=1
   fi
+  i=0
+  while [ "$i" -lt "$CCSEAT_N" ]; do
+    ccseat__pick_height_v "$i"
+    CCSEAT__PICK_H[i]=$CCSEAT__PICK_HV
+    i=$((i + 1))
+  done
+  if [ "${CCSEAT__PICK_CACHE_KEY:-}" != "$cols|$CCSEAT__PICK_COMPACT|${CCSEAT__PICK_NAMEW:-0}|$cur|$CCSEAT__PICK_GEN" ]; then
+    ccseat__pick_cache "$cols" "$cur"
+  fi
   avail=$((lines - 3))
   [ "$avail" -lt 1 ] && avail=1
   ccseat__pick_window "$sel" "$avail"
@@ -274,26 +303,27 @@ ccseat__pick_draw() {
   fi
   [ "$busy" = 1 ] && [ "$cols" -ge 36 ] && title="$title$CCSEAT_C_FAINT  updating…$CCSEAT_C_RESET"
   if [ "$cols" -ge 46 ]; then hint="↑ ↓ move   enter or 1-9 open   q cancel"
-  else hint=$(ccseat_trunc "↑↓ move  enter open  q cancel" "$cols"); fi
+  else hint=${CCSEAT__PICK_HINT_SHORT:=$(ccseat_trunc "↑↓ move  enter open  q cancel" "$cols")}; fi
 
-  out=$(
-    printf '%s%sChoose a seat%s%s\n' "$CCSEAT_C_BOLD" "$CCSEAT_C_TEXT" "$CCSEAT_C_RESET" "$title"
-    if [ -n "$ask" ]; then
-      printf '%s\n\n' "$(ccseat__pick_question "$ask" "$cols")"
-    else
-      printf '%s%s%s\n\n' "$CCSEAT_C_FAINT" "$hint" "$CCSEAT_C_RESET"
-    fi
-    i=$CCSEAT__PICK_OFF
-    while [ "$i" -le "$CCSEAT__PICK_END" ]; do
-      [ "$i" -gt "$CCSEAT__PICK_OFF" ] && [ "$CCSEAT__PICK_COMPACT" = 0 ] && printf '\n'
-      ccseat__pick_seat_lines "$i" "$sel" "$cols" "$cur"
-      i=$((i + 1))
-    done
-    if [ "$CCSEAT_N" -eq 1 ] && [ $((lines - 3 - 3)) -ge 2 ]; then
-      printf '\n%s%s%s\n' "$CCSEAT_C_FAINT" "$(ccseat_trunc "Add another account with: ccseat add" "$cols")" "$CCSEAT_C_RESET"
-    fi
-  )
-  printf '\033[H\033[J%s' "$out"
+  out="$CCSEAT_C_BOLD${CCSEAT_C_TEXT}Choose a seat$CCSEAT_C_RESET$title$nl"
+  if [ -n "$ask" ]; then
+    out="$out$(ccseat__pick_question "$ask" "$cols")$nl$nl"
+  else
+    out="$out$CCSEAT_C_FAINT$hint$CCSEAT_C_RESET$nl$nl"
+  fi
+  i=$CCSEAT__PICK_OFF
+  while [ "$i" -le "$CCSEAT__PICK_END" ]; do
+    [ "$i" -gt "$CCSEAT__PICK_OFF" ] && [ "$CCSEAT__PICK_COMPACT" = 0 ] && out="$out$nl"
+    if [ "$i" = "$sel" ]; then out="$out${CCSEAT__PICK_SEL[i]}$nl"; else out="$out${CCSEAT__PICK_UNSEL[i]}$nl"; fi
+    i=$((i + 1))
+  done
+  if [ "$CCSEAT_N" -eq 1 ] && [ $((lines - 3 - 3)) -ge 2 ]; then
+    out="$out$nl$CCSEAT_C_FAINT$(ccseat_trunc "Add another account with: ccseat add" "$cols")$CCSEAT_C_RESET$nl"
+  fi
+  out=${out%"$nl"}
+  # Home, then every line cleared to its end, then the rest of the screen:
+  # one write that paints over the last frame instead of blanking it first.
+  printf '\033[H%s\033[K\033[J' "${out//$nl/$'\033[K'$nl}"
 }
 
 # Background refreshes run detached (so none is left as a child of Claude
@@ -386,9 +416,17 @@ ccseat_cmd_pick() {
   CCSEAT__PICK_OFF=0
   CCSEAT__PICK_COMPACT=0
   CCSEAT__PICK_RESIZED=0
+  CCSEAT__PICK_SIZED=0
+  CCSEAT__PICK_GEN=0
+  CCSEAT__PICK_CACHE_KEY=""
+  CCSEAT__PICK_HINT_SHORT=""
   CCSEAT__PICK_STTY=$(stty -g 2>/dev/null)
+  # Echo off and no line buffering for as long as the picker is open: keys
+  # pressed while a frame is being drawn are never printed on screen (read -s
+  # only hides what arrives during the read itself).
+  stty -echo -icanon min 1 time 0 2>/dev/null
   trap ccseat__pick_abort INT TERM HUP
-  trap 'CCSEAT__PICK_RESIZED=1' WINCH
+  trap 'CCSEAT__PICK_RESIZED=1 CCSEAT__PICK_SIZED=0 CCSEAT__PICK_HINT_SHORT=""' WINCH
   printf '\033[?1049h\033[?25l'
   ccseat__pick_draw "$sel" "$busy" "$cur"
   # A seat that is out (at its limit) opens only after a y: "ask" holds the
@@ -415,6 +453,7 @@ ccseat_cmd_pick() {
       if [ "$busy" = 1 ] && ccseat__pick_jobs_done; then
         busy=0
         ccseat_rows_load 0
+        CCSEAT__PICK_GEN=$((CCSEAT__PICK_GEN + 1))
         if [ "$moved" = 0 ]; then sel=$(ccseat_rows_freest) || sel=$(ccseat_seat_index "$cur") || sel=0; fi
         draw=1
       fi

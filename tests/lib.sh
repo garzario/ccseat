@@ -519,17 +519,18 @@ widest_line() {
     n=$(printf '%s' "$line" | sed "s/${esc}\\[[0-9;?]*[A-Za-z]//g" | tr -d '\r' | wc -m | tr -d ' ')
     [ "$n" -gt "$w" ] && w=$n
   done <<END_TEXT
-$(printf '%s\n' "$1" | sed "s/${esc}\\[H${esc}\\[J/\\
+$(printf '%s\n' "$1" | sed "s/${esc}\\[H/\\
 /g")
 END_TEXT
   printf '%s' "$w"
 }
 
-# frame_count TEXT : how many times the picker redrew the screen.
+# frame_count TEXT : how many times the picker redrew the screen. Every
+# frame starts by moving the cursor home (ESC [ H) and paints over the last.
 frame_count() {
   local esc
   esc=$(printf '\033')
-  printf '%s' "$1" | grep -o "${esc}\\[H${esc}\\[J" | grep -c .
+  printf '%s' "$1" | grep -o "${esc}\\[H" | grep -c .
 }
 
 # write_usage_json EMAIL JSON : the usage API answer for EMAIL's token, as is.
