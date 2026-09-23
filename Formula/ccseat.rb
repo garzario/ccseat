@@ -6,7 +6,7 @@ class Ccseat < Formula
   desc "Use several Claude Code accounts side by side, one seat per account"
   homepage "https://github.com/garzario/ccseat"
   url "https://github.com/garzario/ccseat/archive/refs/tags/v0.2.2.tar.gz"
-  sha256 "05620e2bdbc925c4b0cff000de21f00573b5de70d2fae8a9718fd3f03e8f0613"
+  sha256 "c36856f292b040f5861e1d723dc32e5a480539a0f6d15e6c5aaadb888eb9c9ca"
   license "MIT"
   head "https://github.com/garzario/ccseat.git", branch: "main"
 
