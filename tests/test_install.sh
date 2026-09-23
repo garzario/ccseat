@@ -62,7 +62,7 @@ test_install_block_passes_syntax_checks() {
     install_sh --yes --shell zsh
     run zsh -n "$HOME/.zshrc"
     assert_success "zsh -n"
-    run zsh -f -i -c "source '$HOME/.zshrc'; whence -w claude; ccseat version"
+    run_i zsh -f -i -c "source '$HOME/.zshrc'; whence -w claude; ccseat version"
     assert_contains "$OUT" "function" "the zsh block defines the claude wrapper"
   fi
 }

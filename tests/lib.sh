@@ -73,6 +73,14 @@ sandbox_base_path() {
 
 # ---------- running commands ----------
 
+# run_i CMD ARGS... : like run, for an interactive shell (bash -i, zsh -i,
+# fish -i). On Linux it starts in a new session with setsid, so a shell that
+# tries to take over the terminal is never stopped by SIGTTIN or SIGTTOU while
+# other tests run in parallel. macOS has no setsid and does not need it.
+run_i() {
+  if command -v setsid >/dev/null 2>&1; then run setsid -w "$@"; else run "$@"; fi
+}
+
 # run CMD ARGS... : runs a command with stdin from /dev/null and captures
 # OUT, ERR and RC. Never exits the test.
 run() {

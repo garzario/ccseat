@@ -444,7 +444,7 @@ test_wrapper_respects_a_config_dir_set_by_the_user() {
   CLAUDE_CONFIG_DIR="$HOME/.claude-work" run ccseat claude -p x
   assert_contains "$OUT" "CLAUDE_CONFIG_DIR=$HOME/.claude-work"
   # An alias like claude2='CLAUDE_CONFIG_DIR=... claude' works the same way.
-  run bash --norc --noprofile -i -c "eval \"\$(ccseat init bash)\"; alias claude2='CLAUDE_CONFIG_DIR=$HOME/.claude-work claude'
+  run_i bash --norc --noprofile -i -c "eval \"\$(ccseat init bash)\"; alias claude2='CLAUDE_CONFIG_DIR=$HOME/.claude-work claude'
 claude2 -p hi"
   assert_contains "$OUT" "CLAUDE_CONFIG_DIR=$HOME/.claude-work"
   # A folder that is not a seat opens exactly as asked.
