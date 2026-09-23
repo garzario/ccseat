@@ -107,6 +107,14 @@ printf '%sccseat tests: %s tests, bash %s (%s), %s%s\n' "$c_dim" "$total" \
 
 # ---------- running ----------
 
+# Lists a process and its children (pid, state, elapsed time, command), so a
+# timed-out test shows what it was waiting on.
+dump_tree() {
+  local pid="$1" indent="${2:-}" child
+  printf '%s%s\n' "$indent" "$(ps -o pid=,stat=,etime=,args= -p "$pid" 2>/dev/null)"
+  for child in $(pgrep -P "$pid" 2>/dev/null); do dump_tree "$child" "$indent  "; done
+}
+
 kill_tree() {
   local pid="$1" child
   for child in $(pgrep -P "$pid" 2>/dev/null); do kill_tree "$child"; done
@@ -133,6 +141,7 @@ start_test() {
     (
       sleep "$timeout"
       : > "$tdir/timeout"
+      dump_tree "$pid" > "$tdir/tree" 2>/dev/null
       kill_tree "$pid"
     ) </dev/null >/dev/null 2>&1 &
     local wd=$!
@@ -154,6 +163,10 @@ report() {
   if [ -f "$dir/timeout" ]; then
     rc=124
     printf 'timed out after %s s\n' "$timeout" >> "$dir/log"
+    if [ -s "$dir/tree" ]; then
+      printf 'processes still running:\n' >> "$dir/log"
+      sed 's/^/  /' "$dir/tree" >> "$dir/log"
+    fi
   fi
   case "$rc" in
     0)
