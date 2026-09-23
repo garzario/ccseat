@@ -32,7 +32,7 @@ def win: if type != "object" then {p: null, r: null}
       elif $r != null and $r <= $now then {p: 0, r: null}
       else {p: ([$p, 0] | max), r: $r} end end;
 def valid: type == "object" and ((.five_hour | type) == "object" or (.seven_day | type) == "object");
-def clean: tostring | gsub("[;|\t\n\r]"; " ");
+def clean: tostring | gsub("[;|\t\n\r]"; " ") | gsub("[[:cntrl:]]"; "");
 # Weekly limits for one model ("Fable weekly 91%"): the limits list of the
 # current API, or the older seven_day_opus and seven_day_sonnet windows.
 # Only from an API answer less than 6 hours old.
@@ -79,7 +79,9 @@ ccseat__usage_err_path() {
 ccseat_usage_err() {
   local f r=""
   f=$(ccseat__usage_err_path "${1:-}")
-  [ -f "$f" ] && IFS= read -r r < "$f"
+  { [ -f "$f" ] && ! [ -L "$f" ]; } && IFS= read -r r < "$f"
+  # Only the words ccseat writes; anything else is not a reason to print.
+  case "$r" in nologin|expired|auth|offline|ratelimited|http|bad) ;; *) r="" ;; esac
   printf '%s' "$r"
 }
 
@@ -88,7 +90,12 @@ ccseat__usage_set_err() {
 }
 
 # Fetches a seat's usage into its cache. Returns 0 when fresh data arrived.
+# Runs with "bash -x" tracing paused, since it holds the seat's token.
 ccseat_usage_fetch() {
+  ccseat__untraced ccseat__usage_fetch "$@"
+}
+
+ccseat__usage_fetch() {
   local name="$1" max="${2:-5}" dir resp code body lock
   dir=$(ccseat_seat_dir "$name") || return 1
   ccseat_mkdir_private "$CCSEAT_CACHE_DIR" || return 1
@@ -103,6 +110,13 @@ ccseat_usage_fetch() {
     ccseat__usage_set_err "$name" expired
     return 1
   fi
+  # A token that is not a plain bearer token could add lines to curl's
+  # config below; the usage API cannot be asked with it.
+  if ! ccseat_token_ok "$CCSEAT_TOKEN"; then
+    CCSEAT_TOKEN=""
+    ccseat__usage_set_err "$name" auth
+    return 1
+  fi
   # One fetch per seat at a time; a lock older than a minute is stale.
   lock="$CCSEAT_CACHE_DIR/.fetch-$name.lock"
   if [ -d "$lock" ] && [ "$(ccseat_file_age "$lock")" -gt 60 ]; then rmdir "$lock" 2>/dev/null; fi
@@ -111,8 +125,11 @@ ccseat_usage_fetch() {
     return 1
   fi
   # The header goes to curl on stdin, so the token never shows up in ps.
-  resp=$(printf 'header = "Authorization: Bearer %s"\n' "$CCSEAT_TOKEN" \
-    | curl -s -K - --max-time "$max" --connect-timeout 3 \
+  # -q must come first: it keeps ~/.curlrc out of this request, where an
+  # "insecure", "trace" or "proxy" line would expose the token. The config
+  # also allows https only, redirects included, and a small answer.
+  resp=$(printf 'header = "Authorization: Bearer %s"\nproto = "=https"\nmax-filesize = 1048576\n' "$CCSEAT_TOKEN" \
+    | curl -q -s -K - --max-time "$max" --connect-timeout 3 \
       -H "Accept: application/json" \
       -H "Content-Type: application/json" \
       -H "anthropic-beta: oauth-2025-04-20" \
@@ -345,6 +362,31 @@ ccseat_rows_load() {
   done
 }
 
+# After ccseat_rows_load: is the seat at a 0-based index out, that is at its
+# 5-hour or weekly limit with a login to use? (A seat that is not logged in
+# says that instead.)
+ccseat_row_out() {
+  [ -n "${CCSEAT_ROW_LIMIT[$1]:-}" ] && [ "${CCSEAT_ROW_AUTH[$1]:-}" != none ]
+}
+
+# After ccseat_rows_load: is one window (5 or 7) of a seat at its limit?
+ccseat_row_window_out() {
+  local p l
+  if [ "$2" = 5 ]; then p=${CCSEAT_ROW_P5[$1]:-} l=$(ccseat_config_get limit_5h)
+  else p=${CCSEAT_ROW_P7[$1]:-} l=$(ccseat_config_get limit_weekly); fi
+  case "$p" in ''|-|*[!0-9]*) return 1 ;; esac
+  [ "$p" -ge "$l" ]
+}
+
+# When an out seat is back: the reset of the window at its limit (the later
+# one when both are), as "Thursday 4:00 PM"; nothing when it is not known.
+ccseat_row_back() {
+  local t
+  t=$(ccseat_fmt_reset "${CCSEAT_ROW_UNTIL[$1]:--}")
+  [ "$t" = - ] && t=""
+  printf '%s' "$t"
+}
+
 # Index of the freest seat after ccseat_rows_load, skipping one index.
 # Ties go to the earlier seat. Prints nothing when no seat is logged in.
 ccseat_rows_freest() {
@@ -442,10 +484,15 @@ ccseat_cmd_usage() {
     if [ "$all" = 1 ]; then
       ccseat__rows_json "$names"
     else
-      # One seat: an object, with the last raw answer of the usage API.
+      # One seat: an object, with the last raw answer of the usage API. Only
+      # ccseat's own cache file and only its usage keys: never whatever a
+      # link planted in the cache folder points to.
       raw=$(ccseat_usage_cache_path "$names")
-      [ -f "$raw" ] || raw=/dev/null
-      ccseat__rows_json "$names" | jq --slurpfile raw "$raw" '.[0] + {raw: ($raw[0] // null)}' 2>/dev/null \
+      { [ -f "$raw" ] && ! [ -L "$raw" ]; } || raw=/dev/null
+      ccseat__rows_json "$names" | jq --slurpfile raw "$raw" '.[0] + {raw: ($raw[0] // null
+          | if type == "object" then with_entries(select(.key == "five_hour" or .key == "seven_day"
+              or .key == "limits" or .key == "fetched_at" or .key == "source"
+              or (.key | test("^seven_day_")))) else null end)}' 2>/dev/null \
         || ccseat__rows_json "$names" | jq '.[0]'
     fi
     return 0
@@ -501,9 +548,9 @@ ccseat__usage_status_line() {
     *) s="updated $s"; c=$CCSEAT_C_FAINT ;;
   esac
   if [ -n "${CCSEAT_ROW_LIMIT[i]}" ]; then
-    printf '    %sat its %s limit' "$CCSEAT_C_ORANGE" "${CCSEAT_ROW_LIMIT[i]}"
+    printf '    %s%slimit reached' "$CCSEAT_C_BOLD" "$CCSEAT_C_RED"
     [ "${CCSEAT_ROW_UNTIL[i]}" != - ] && printf ' until %s' "$(ccseat_fmt_reset "${CCSEAT_ROW_UNTIL[i]}")"
-    printf '%s\n' "$CCSEAT_C_RESET"
+    printf '%s %s(%s limit)%s\n' "$CCSEAT_C_RESET" "$CCSEAT_C_RED" "${CCSEAT_ROW_LIMIT[i]}" "$CCSEAT_C_RESET"
   fi
   printf '    %s%s%s\n' "$c" "$s" "$CCSEAT_C_RESET"
 }

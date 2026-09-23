@@ -23,6 +23,8 @@ set -u
 TESTS_DIR=$(cd "$(dirname "$0")" && pwd -P)
 REPO_ROOT=$(cd "$TESTS_DIR/.." && pwd -P)
 export TESTS_DIR REPO_ROOT
+# Checked after the run: no test may remove the program under test.
+program="$REPO_ROOT/bin/ccseat" program_lib="$REPO_ROOT/lib/ccseat/core.sh"
 export CCSEAT_TEST_ORIG_PATH="$PATH"
 
 jobs=1 verbose=0 keep=0 timeout=60 list_only=0
@@ -153,6 +155,8 @@ start_test() {
     wait "$pid"
     local rc=$?
     kill_tree "$wd"
+    # Reaping the watchdog here keeps bash from printing "Terminated" for it.
+    wait "$wd" 2>/dev/null
     printf '%s\n' "$rc" > "$tdir/rc.tmp" && mv "$tdir/rc.tmp" "$tdir/rc"
   ) &
 }
@@ -228,6 +232,11 @@ wait 2>/dev/null
 
 elapsed=$(( $(date +%s) - started_at ))
 printf '\n'
+# A test must never remove or trash the program under test.
+if [ ! -f "$program" ] || [ ! -f "$program_lib" ]; then
+  failed=$((failed + 1))
+  failed_list="$failed_list  the program under test is gone: a test removed bin/ccseat or lib/ccseat"$'\n'
+fi
 if [ "$failed" -gt 0 ]; then
   printf '%sFailed:%s\n%s' "$c_bad" "$c_r" "$failed_list"
 fi

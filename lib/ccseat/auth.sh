@@ -99,8 +99,13 @@ ccseat__cred_blob() {
 # Loads the login of a config dir into CCSEAT_TOKEN, CCSEAT_TOKEN_EXP (ms,
 # 0 when unknown), CCSEAT_TOKEN_REFRESH (1 when a refresh token exists) and
 # CCSEAT_TOKEN_PLAN. Returns 1 when the dir has no login. Callers clear
-# CCSEAT_TOKEN as soon as they are done with it.
+# CCSEAT_TOKEN as soon as they are done with it. Runs with "bash -x"
+# tracing paused.
 ccseat_token_load() {
+  ccseat__untraced ccseat__token_load "$@"
+}
+
+ccseat__token_load() {
   local blob line
   CCSEAT_TOKEN="" CCSEAT_TOKEN_EXP=0 CCSEAT_TOKEN_REFRESH=0 CCSEAT_TOKEN_PLAN=""
   blob=$(ccseat__cred_blob "${1:-}")
@@ -124,6 +129,21 @@ ccseat_token_load() {
   line=""
   case "$CCSEAT_TOKEN_EXP" in ''|*[!0-9]*) CCSEAT_TOKEN_EXP=0 ;; esac
   [ -n "$CCSEAT_TOKEN" ]
+}
+
+# True when a token is a bearer token as RFC 6750 spells it: letters,
+# digits and -._~+/ with "=" padding at the end. The usage request puts the
+# token in a quoted line of curl's config, so a quote, a backslash or a line
+# break in it would add options of its own (another URL, an output file);
+# such a login is never sent. Spelled out instead of ranges, which some
+# locales stretch to other characters.
+ccseat_token_ok() {
+  local t="${1:-}"
+  while [ "${t%=}" != "$t" ]; do t=${t%=}; done
+  case "$t" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~+/-]*) return 1 ;;
+  esac
+  return 0
 }
 
 # Sets CCSEAT_AUTH to ok, expired (Claude Code renews it the next time the
@@ -166,16 +186,18 @@ ccseat_plan_label() {
     *team*) printf 'Team' ;;
     *enterprise*) printf 'Enterprise' ;;
     '') ;;
-    *) printf '%s' "$1" ;;
+    *) printf '%s' "${1//[[:cntrl:]]/}" ;;
   esac
 }
 
 # Login email of a config dir, from its global config (no process started).
+# Control characters are dropped: an email is printed on the terminal, and
+# an adopted folder's config could carry escape codes in it.
 ccseat_email() {
   local gc e
   gc=$(ccseat_global_config "${1:-}")
   [ -f "$gc" ] || return 1
-  e=$(jq -r '.oauthAccount.emailAddress // empty' "$gc" 2>/dev/null)
+  e=$(jq -r '.oauthAccount.emailAddress // empty | tostring | gsub("[[:cntrl:]]"; "")' "$gc" 2>/dev/null)
   [ -n "$e" ] || return 1
   printf '%s' "$e"
 }
@@ -192,7 +214,7 @@ ccseat_email_live() {
     out=$(env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR="$d" \
       "$bin" auth status --json </dev/null 2>/dev/null)
   fi
-  e=$(printf '%s' "$out" | jq -r '.email // empty' 2>/dev/null)
+  e=$(printf '%s' "$out" | jq -r '.email // empty | tostring | gsub("[[:cntrl:]]"; "")' 2>/dev/null)
   [ -n "$e" ] || return 1
   printf '%s' "$e"
 }

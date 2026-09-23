@@ -102,15 +102,17 @@ ccseat__is_file_item() {
 }
 
 # Creates a missing shared target in the primary, so every link is valid.
+# New ones are private: they fill up with prompts, conversations and
+# settings.
 ccseat__ensure_target() {
   local item="$1" t="$CCSEAT_PRIMARY_DIR/$1"
   [ -e "$t" ] && return 0
   [ -L "$t" ] && return 1
-  mkdir -p "$CCSEAT_PRIMARY_DIR" 2>/dev/null || return 1
+  ccseat_mkdir_private "$CCSEAT_PRIMARY_DIR" || return 1
   if ccseat__is_file_item "$item"; then
-    if [ "$item" = settings.json ]; then printf '{}\n' > "$t"; else : > "$t"; fi
+    if [ "$item" = settings.json ]; then (umask 077 && printf '{}\n' > "$t"); else (umask 077 && : > "$t"); fi
   else
-    mkdir -p "$t"
+    ccseat_mkdir_private "$t"
   fi
 }
 
@@ -170,7 +172,12 @@ ccseat__retire_item() {
   fi
   [ -n "${CCSEAT__BACKUP_STAMP:-}" ] || CCSEAT__BACKUP_STAMP=$(LC_ALL=C date +%Y%m%d-%H%M%S)
   dest="$dir/.ccseat-backup/$CCSEAT__BACKUP_STAMP"
+  # The copy stays inside the seat's folder: never through a link planted
+  # there (one to ~/.claude would replace the primary's own file), and
+  # never over something already in place.
+  if [ -L "$dir/.ccseat-backup" ] || [ -L "$dest" ]; then return 1; fi
   mkdir -p "$dest" 2>/dev/null || return 1
+  if [ -e "$dest/$item" ] || [ -L "$dest/$item" ]; then return 1; fi
   mv "$p" "$dest/$item" || return 1
   CCSEAT__NOTE_KEPT="$CCSEAT__NOTE_KEPT $item"
   CCSEAT__NOTE_BACKUP=$dest
@@ -199,7 +206,7 @@ ccseat_links_ensure() {
       continue
     fi
     if ! [ -e "$target" ] && ! [ -L "$target" ] && ccseat__has_content "$link"; then
-      if mkdir -p "$CCSEAT_PRIMARY_DIR" 2>/dev/null && mv "$link" "$target" 2>/dev/null; then
+      if ccseat_mkdir_private "$CCSEAT_PRIMARY_DIR" && mv "$link" "$target" 2>/dev/null; then
         CCSEAT__NOTE_MOVED="$CCSEAT__NOTE_MOVED $item"
       fi
     fi
@@ -330,6 +337,8 @@ ccseat__links_prune() {
   share=" $(ccseat_share_items) "
   prev=$(ccseat__state_get "$dir" links)
   for item in $prev; do
+    # Names ccseat could have linked, never a path out of the folder.
+    case "$item" in ''|.|..|*[!A-Za-z0-9._-]*) continue ;; esac
     case "$share" in
       *" $item "*) keep="$keep $item" ;;
       *)
@@ -481,15 +490,49 @@ ccseat__check_adopt_dir() {
     || { ccseat_path_within "$d" "$CCSEAT_DATA_DIR" && ! ccseat_path_within "$d" "$CCSEAT_SEATS_DIR"; }; then
     ccseat_die "$(ccseat_tilde "$d") is one of ccseat's own folders, so it cannot be a seat folder" "$own"
   fi
+  # A project's own .claude folder holds its settings and commands, not a
+  # login: only ~/.claude is a config folder by that name.
+  if [ "${d##*/}" = .claude ]; then
+    ccseat_die "$(ccseat_tilde "$d") is a project's .claude folder, not a config folder" "$own"
+  fi
+  # A git work tree is a project: its files would move to a backup, a login
+  # and links would land in it, and removing the seat would move all of it
+  # to the Trash.
+  if ccseat__in_git_work_tree "$d"; then
+    ccseat_die "$(ccseat_tilde "$d") is in a git repository, so it cannot be a seat folder" "$own"
+  fi
   [ -d "$d" ] || return 0
   ccseat__is_empty_dir "$d" && return 0
-  for f in .claude.json .config.json .credentials.json settings.json projects sessions statsig CLAUDE.md shell-snapshots; do
+  # Only what Claude Code itself writes into a config folder counts:
+  # CLAUDE.md, settings.json and projects are common in any repository.
+  for f in .claude.json .config.json .credentials.json statsig sessions shell-snapshots; do
     [ -e "$d/$f" ] && return 0
   done
   ccseat_auth_check "$d"
   [ "$CCSEAT_AUTH" != none ] && return 0
   ccseat_die "$(ccseat_tilde "$d") does not look like a Claude Code config folder" \
     "Pass the folder you use as CLAUDE_CONFIG_DIR, an empty folder, or leave --dir out for a new one."
+}
+
+# True when a folder is a git repository or inside one. A home folder kept
+# in git (dotfiles) does not count: it holds ~/.claude as well.
+ccseat__in_git_work_tree() {
+  local d="$1" p top
+  p=$d
+  # The folder may not exist yet: look from its nearest existing parent.
+  while [ -n "$p" ] && ! [ -d "$p" ]; do p=${p%/*}; done
+  [ -n "$p" ] || p=/
+  [ -e "$d/.git" ] && return 0
+  command -v git >/dev/null 2>&1 || return 1
+  # On a Mac without the developer tools, /usr/bin/git would only open a
+  # dialog offering to install them.
+  if [ "$(command -v git)" = /usr/bin/git ] && ccseat_is_macos && ! xcode-select -p >/dev/null 2>&1; then
+    return 1
+  fi
+  top=$(env -u GIT_DIR -u GIT_WORK_TREE git -C "$p" rev-parse --show-toplevel 2>/dev/null) || return 1
+  [ -n "$top" ] || return 1
+  ccseat_path_within "$CCSEAT_USER_HOME" "$top" && return 1
+  return 0
 }
 
 ccseat_cmd_add() {
@@ -893,8 +936,9 @@ ccseat_cmd_list() {
   if [ -t 1 ]; then
     cols=$(ccseat_term_cols)
     if [ "$total" -gt "$cols" ]; then
-      # "weekly limit" instead of "at its weekly limit" when that is what it
-      # takes to keep the table; else one small block per seat.
+      # "limit reached" instead of "limit reached until Thursday 4:00 PM"
+      # when that is what it takes to keep the table (the resets columns
+      # still say when); else one small block per seat.
       if [ $(( total - w_st + w_short )) -le "$cols" ]; then short=1; else compact=1; fi
     fi
   fi
@@ -921,29 +965,37 @@ ccseat_cmd_list() {
     if [ "${CCSEAT_ROW_AUTH[i]}" = none ]; then p5=- p7=- f5=- f7=-; fi
     pc5=$(ccseat_pct_color "$p5" "$(ccseat_config_get limit_5h)")
     pc7=$(ccseat_pct_color "$p7" "$(ccseat_config_get limit_weekly)")
+    # The window that put a seat out is red.
+    if ccseat_row_out "$i"; then
+      ccseat_row_window_out "$i" 5 && pc5=$CCSEAT_C_RED
+      ccseat_row_window_out "$i" 7 && pc7=$CCSEAT_C_RED
+    fi
     [ "$p5" != - ] && p5="$p5%"
     [ "$p7" != - ] && p7="$p7%"
     st=${ST[i]}
     if [ "$compact" = 0 ]; then
-      printf '%s%s  %s%s%s  %s%s%s  %s  %s%s%s  %s  %s%s%s\n' "$mark" "$(ccseat_rpad $((i + 1)) "$w_idx")" \
+      printf '%s%s  %s%s%s  %s%s%s  %s  %s%s%s  %s  %s\n' "$mark" "$(ccseat_rpad $((i + 1)) "$w_idx")" \
         "$nc" "$(ccseat_pad "$n" "$w_name")" "$CCSEAT_C_RESET" \
         "$pc5" "$(ccseat_rpad "$p5" 6)" "$CCSEAT_C_RESET" \
         "$(ccseat_pad "$f5" "$w_r5")" \
         "$pc7" "$(ccseat_rpad "$p7" 6)" "$CCSEAT_C_RESET" \
-        "$(ccseat_pad "$f7" "$w_r7")" "$(ccseat__row_status_color "$i")" "$st" "$CCSEAT_C_RESET"
+        "$(ccseat_pad "$f7" "$w_r7")" "$(ccseat__row_status_paint "$i" "$st")"
       i=$((i + 1))
       continue
     fi
     # Stacked: the name and status, then one line per window.
     head=$((i + 1))
     head=$(( 2 + ${#head} + 2 ))
+    # "limit reached until Thursday 4:00 PM" becomes "limit reached" when
+    # it would not fit next to the name.
+    [ $(( head + ${#n} + 2 + ${#st} )) -gt "$cols" ] && st=$(ccseat__row_status "$i" short)
     avail=$(( cols - head - 2 - ${#st} ))
     [ "$avail" -lt 8 ] && avail=8
     n=$(ccseat_trunc "$n" "$avail")
     avail=$(( cols - head - ${#n} - 2 ))
     [ "$avail" -lt 4 ] && avail=4
-    printf '%s%s  %s%s%s  %s%s%s\n' "$mark" "$((i + 1))" "$nc" "$n" "$CCSEAT_C_RESET" \
-      "$(ccseat__row_status_color "$i")" "$(ccseat_trunc "$st" "$avail")" "$CCSEAT_C_RESET"
+    printf '%s%s  %s%s%s  %s\n' "$mark" "$((i + 1))" "$nc" "$n" "$CCSEAT_C_RESET" \
+      "$(ccseat__row_status_paint "$i" "$(ccseat_trunc "$st" "$avail")")"
     if [ "$p5" != - ] || [ "$p7" != - ]; then
       ccseat__list_stacked_line 5-hour "$p5" "$pc5" "$f5" "$cols"
       ccseat__list_stacked_line weekly "$p7" "$pc7" "$f7" "$cols"
@@ -973,29 +1025,47 @@ ccseat__list_stacked_line() {
     "$CCSEAT_C_RESET" "$CCSEAT_C_FAINT" "$(ccseat_trunc "$f" "$avail")" "$CCSEAT_C_RESET"
 }
 
-# What the status column says: the limit a seat is at comes first ("weekly
-# limit" with $2=short, for a tight table).
+# What the status column says. A seat that is out comes first: "limit
+# reached until Thursday 4:00 PM" ("limit reached" with $2=short, for a
+# tight table), then how old the numbers are when they are not live.
 ccseat__row_status() {
-  local i="$1" s lim
+  local i="$1" s lim back
   s=${CCSEAT_ROW_STATUS[i]}
-  if [ -n "${CCSEAT_ROW_LIMIT[i]}" ]; then
-    if [ "${2:-}" = short ]; then lim="${CCSEAT_ROW_LIMIT[i]} limit"
-    else lim="at its ${CCSEAT_ROW_LIMIT[i]} limit"; fi
+  if ccseat_row_out "$i"; then
+    lim="limit reached"
+    back=$(ccseat_row_back "$i")
+    [ "${2:-}" != short ] && [ -n "$back" ] && lim="$lim until $back"
     if [ "$s" = live ]; then s=$lim; else s="$lim, $s"; fi
   fi
   printf '%s' "$s"
 }
 
-# Color only where it means something: limits and missing logins in orange,
-# trouble fetching in kraft, the rest faint.
+# Color only where it means something: a seat that is out in bold red,
+# missing logins in orange, trouble fetching in kraft, the rest faint.
 ccseat__row_status_color() {
   local i="$1"
-  if [ -n "${CCSEAT_ROW_LIMIT[i]}" ]; then printf '%s' "$CCSEAT_C_ORANGE"; return; fi
+  if ccseat_row_out "$i"; then printf '%s%s' "$CCSEAT_C_BOLD" "$CCSEAT_C_RED"; return; fi
   case "${CCSEAT_ROW_STATUS[i]}" in
     "not logged in") printf '%s' "$CCSEAT_C_ORANGE" ;;
     offline|"usage unavailable") printf '%s' "$CCSEAT_C_KRAFT" ;;
     *) printf '%s' "$CCSEAT_C_FAINT" ;;
   esac
+}
+
+# A status in its colors. For a seat that is out, only "limit reached until
+# ..." is bold red; the age after it stays faint.
+ccseat__row_status_paint() {
+  local i="$1" t="$2" head
+  if ccseat_row_out "$i"; then
+    case "$t" in
+      *", "*)
+        head=${t%%, *}
+        printf '%s%s%s%s%s%s' "$(ccseat__row_status_color "$i")" "$head" "$CCSEAT_C_RESET" \
+          "$CCSEAT_C_FAINT" "${t#"$head"}" "$CCSEAT_C_RESET"
+        return ;;
+    esac
+  fi
+  printf '%s%s%s' "$(ccseat__row_status_color "$i")" "$t" "$CCSEAT_C_RESET"
 }
 
 # ---------- run / launch ----------
@@ -1042,8 +1112,23 @@ ccseat_cmd_run() {
   # Without jq a login looks absent, and run would start a needless sign-in.
   ccseat_need_jq
   ccseat_resolve_seat "$ref" || exit 1
+  ccseat__warn_if_out "$CCSEAT_R_NAME" "$CCSEAT_R_DIR"
   ccseat__login_if_needed "$CCSEAT_R_NAME" "$CCSEAT_R_DIR"
   ccseat_exec_seat "$CCSEAT_R_NAME" "$CCSEAT_R_DIR" "$@"
+}
+
+# One line on stderr when a seat asked for by name is out (at its 5-hour or
+# weekly limit): it opens anyway, since that is what was asked. Reads the
+# usage cache only, so it never waits on the network.
+ccseat__warn_if_out() {
+  local name="$1" dir="$2" msg
+  ccseat_auth_check "$dir"
+  [ "$CCSEAT_AUTH" = none ] && return 0
+  ccseat_usage_load "$name" "$dir"
+  ccseat_usage_at_limit || return 0
+  msg="$name is out"
+  [ "$CCSEAT_LIMIT_UNTIL" != - ] && msg="$msg until $(ccseat_fmt_reset "$CCSEAT_LIMIT_UNTIL")"
+  ccseat_err "$msg ($CCSEAT_LIMIT_WHICH limit), opening it anyway."
 }
 
 # Claude Code subcommands that do not start a session: no auto-switch, no

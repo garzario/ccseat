@@ -5,7 +5,7 @@
 class Ccseat < Formula
   desc "Use several Claude Code accounts side by side, one seat per account"
   homepage "https://github.com/garzario/ccseat"
-  url "https://github.com/garzario/ccseat/archive/refs/tags/v0.1.0.tar.gz"
+  url "https://github.com/garzario/ccseat/archive/refs/tags/v0.2.0.tar.gz"
   sha256 "f629151d45e4d4940731449a3961addf4b91ae7ca5da01625b11c5a6b2c5c4aa"
   license "MIT"
   head "https://github.com/garzario/ccseat.git", branch: "main"
@@ -32,7 +32,7 @@ class Ccseat < Formula
 
       Next steps:
         ccseat add                  add a seat (logs in to another account)
-        ccseat                      pick a seat and open Claude Code
+        cc (or ccseat)              pick a seat and open Claude Code
         ccseat statusline install   show the seat and usage under the prompt
 
       Before brew uninstall ccseat, run: ccseat uninstall

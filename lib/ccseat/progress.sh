@@ -33,7 +33,7 @@ _CCSEAT_PG_US=$'\037'
 # Line 1: started, finished, failed, current phase, first label, started in phase, finished
 # in phase. Next lines: agentId and label of each running agent.
 # shellcheck disable=SC2016 # a jq program, not shell
-_CCSEAT_PG_JQ='def clean: tostring | gsub("[\t\n\r\u001f]"; " ");
+_CCSEAT_PG_JQ='def clean: tostring | gsub("[\t\n\r]"; " ") | gsub("[[:cntrl:]]"; "");
 reduce (inputs | fromjson? | select(type == "object" and .key != null)) as $e
   ({order: [], k: {}, ph: "", first: ""};
    ($e.key | tostring) as $key
@@ -148,7 +148,7 @@ _ccseat_pg_phases() {
   [ -f "$1" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     while [[ $line =~ $re ]]; do
-      printf '%s\n' "${BASH_REMATCH[1]}"
+      printf '%s\n' "${BASH_REMATCH[1]//[[:cntrl:]]/}"
       line=${line#*"${BASH_REMATCH[0]}"}
     done
     case "$line" in "}"*) break ;; esac
@@ -193,7 +193,7 @@ EOF
   _ccseat_pg_glob "$_pg_sid" "workflows/scripts/*-$run.js"
   script=${_PG_HITS%%$'\n'*}
   if [ -n "$script" ]; then
-    _pg_name=${script##*/}; _pg_name=${_pg_name%-"$run".js}
+    _pg_name=${script##*/}; _pg_name=${_pg_name%-"$run".js}; _pg_name=${_pg_name//[[:cntrl:]]/}
   else
     _pg_name=${first:-workflow}
   fi
@@ -238,7 +238,7 @@ _ccseat_pg_agent_stats() {
 
 _ccseat_pg_meta() {
   jq -r '[.requestShape // "", .taskKind // "", .toolUseId // "", .description // "agent", .agentType // ""]
-    | map(tostring | gsub("[\t\n\r\u001f]"; " ")) | join("\u001f")' "$1" 2>/dev/null
+    | map(tostring | gsub("[\t\n\r]"; " ") | gsub("[[:cntrl:]]"; "")) | join("\u001f")' "$1" 2>/dev/null
 }
 
 _ccseat_pg_dash() { if [ -n "$1" ]; then printf '%s' "$1"; else printf -- '-'; fi; }
@@ -312,7 +312,7 @@ EOF
         typ=""; _pg_calls="-"; _pg_last="-"; _pg_age=0
       else
         m="${a%.jsonl}.meta.json"
-        typ=$(jq -r '.agentType // ""' "$m" 2>/dev/null)
+        typ=$(jq -r '.agentType // "" | tostring | gsub("[\t\n\r]"; " ") | gsub("[[:cntrl:]]"; "")' "$m" 2>/dev/null)
         _ccseat_pg_agent_stats "$a" "$m" "$mt"
       fi
       printf 'A\twf\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$(_ccseat_pg_dash "$label")" \
@@ -355,9 +355,10 @@ EOF
   while read -r mt a; do [ -n "$a" ] && set -- "$@" "${a%.jsonl}.meta.json"; done <<EOF
 $recent
 EOF
-  metas=$(jq -r '[input_filename, .requestShape // "", .taskKind // "", .toolUseId // "",
-      .description // "agent", .agentType // ""]
-    | map(tostring | gsub("[\t\n\r\u001f]"; " ")) | join("\u001f")' "$@" 2>/dev/null)
+  metas=$(jq -r '[input_filename | tostring | gsub("[\t\n\r\u001f]"; " ")]
+      + ([.requestShape // "", .taskKind // "", .toolUseId // "", .description // "agent", .agentType // ""]
+         | map(tostring | gsub("[\t\n\r]"; " ") | gsub("[[:cntrl:]]"; "")))
+    | join("\u001f")' "$@" 2>/dev/null)
   transcripts=$(_ccseat_pg_transcripts "$sid")
   bgpat=""; fgpat=""
   while IFS=$_CCSEAT_PG_US read -r m shape tk tuid desc typ; do

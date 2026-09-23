@@ -4,7 +4,9 @@
 #                         <token> is the bearer token from the config read on
 #                         stdin (-K -) or from a -H header; 401 when there is
 #                         no fixture for that token
-#   file://<path>         copies the file (used by the installer tests)
+#   file://<path>         copies the file (used by the installer tests); a
+#                         missing file answers 404, and <path>.status holds
+#                         another HTTP status to answer with
 #   anything else         fails like an unreachable host
 # Failure and delay modes: CCSEAT_STUB_CURL_FAIL=1 or a file
 # $CCSEAT_STUB_DIR/curl_fail (exit 28, timeout); CCSEAT_STUB_CURL_DELAY=<s> or a
@@ -61,10 +63,20 @@ write_out() {
 
 case "$url" in
   file://*)
+    # A stand-in for an HTTP server: a missing file answers 404, and a file
+    # <path>.status next to it makes the answer that HTTP status instead.
     path="${url#file://}"
-    if [ ! -f "$path" ]; then
-      echo "curl: (37) Couldn't open file $path" >&2
-      exit 37
+    status=200
+    if [ -f "$path.status" ]; then status=$(cat "$path.status")
+    elif [ ! -f "$path" ]; then status=404; fi
+    if [ "$status" != 200 ]; then
+      write_out "$status"
+      if [ "$fail_flag" -eq 1 ]; then
+        echo "curl: (22) The requested URL returned error: $status" >&2
+        exit 22
+      fi
+      emit - "HTTP $status"
+      exit 0
     fi
     emit "$path"
     write_out 200

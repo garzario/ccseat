@@ -11,6 +11,15 @@ need_program() {
   [ -f "$REPO_ROOT/bin/ccseat" ] || skip "bin/ccseat is not written yet"
 }
 
+# A git clone of ccseat in the sandbox, for tests that run "ccseat
+# uninstall": it must never reach the program under test, and a checkout
+# without a .git folder (a worktree, an unpacked release) would otherwise be
+# moved to the Trash.
+fake_clone() {
+  mkdir -p "$T/clone/.git"
+  cp -R "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$REPO_ROOT/install.sh" "$T/clone/" || fail "cannot copy the program"
+}
+
 # A tarball shaped like GitHub's archive of the repository.
 make_tarball() {
   mkdir -p "$T/src/ccseat-main"
@@ -218,6 +227,8 @@ test_install_from_a_tarball() {
 test_install_tarball_urls() {
   install_sh --download --no-shell
   assert_failure "no network in tests"
+  assert_contains "$(cat "$STUB/curl.args")" "https://github.com/garzario/ccseat/releases/latest" "the latest release by default"
+  install_sh --download --no-shell --ref main
   assert_contains "$(cat "$STUB/curl.args")" "https://github.com/garzario/ccseat/archive/refs/heads/main.tar.gz"
   install_sh --download --no-shell --ref v0.1.0
   assert_contains "$(cat "$STUB/curl.args")" "https://github.com/garzario/ccseat/archive/refs/tags/v0.1.0.tar.gz"
@@ -290,7 +301,8 @@ test_ccseat_uninstall_keeps_seats() {
   need_program
   export SHELL=/bin/zsh
   printf 'export EDITOR=vim\n' > "$HOME/.zshrc"
-  install_sh --yes
+  fake_clone
+  run bash "$T/clone/install.sh" --yes
   make_primary alice@example.com
   add_seat bob@example.com
   run "$HOME/.local/bin/ccseat" uninstall -y
@@ -300,14 +312,15 @@ test_ccseat_uninstall_keeps_seats() {
   assert_contains "$(cat "$HOME/.zshrc")" "export EDITOR=vim"
   assert_dir "$(seat_dir bob)" "seats are kept without --purge"
   assert_file "$(seats_file)"
-  assert_file "$REPO_ROOT/bin/ccseat" "the clone is never removed"
+  assert_file "$T/clone/bin/ccseat" "the clone is never removed"
 }
 
 test_ccseat_uninstall_purge() {
   local bob
   need_program
   export SHELL=/bin/zsh
-  install_sh --yes
+  fake_clone
+  run bash "$T/clone/install.sh" --yes
   make_primary alice@example.com
   add_seat bob@example.com
   bob=$(seat_dir bob)
@@ -318,6 +331,23 @@ test_ccseat_uninstall_purge() {
   in_trash "$(basename "$bob")" || fail "purged seat folders go to the Trash"
   assert_file "$HOME/.claude/.credentials.json" "the primary ~/.claude is never removed"
   assert_file "$HOME/.claude/settings.json"
+}
+
+test_ccseat_uninstall_leaves_a_worktree_in_place() {
+  need_program
+  export SHELL=/bin/zsh
+  fake_clone
+  # In a git worktree or a submodule, .git is a file.
+  rmdir "$T/clone/.git"
+  printf 'gitdir: %s/main/.git/worktrees/clone\n' "$T" > "$T/clone/.git"
+  run bash "$T/clone/install.sh" --yes
+  assert_success "install.sh from a worktree: $ERR"
+  run "$HOME/.local/bin/ccseat" uninstall -y
+  assert_success "ccseat uninstall: $ERR"
+  assert_contains "$OUT" "Left the source folder"
+  assert_file "$T/clone/bin/ccseat" "a worktree is never moved to the Trash"
+  assert_file "$T/clone/lib/ccseat/core.sh"
+  assert_no_path "$HOME/.local/bin/ccseat"
 }
 
 test_setup_and_installer_share_one_block() {
@@ -377,7 +407,9 @@ test_install_output_fits_80_columns() {
   need_program
   export SHELL=/bin/zsh
   CCSEAT_INSTALL_TTY="$T/no-such-tty" run bash "$REPO_ROOT/install.sh"
-  w=$(widest_line "$OUT")
+  # Lines that show the checkout's own path grow with it, so they are not
+  # measured.
+  w=$(widest_line "$(printf '%s\n' "$OUT" | grep -vF "$REPO_ROOT")")
   [ "$w" -le 80 ] || fail "an installer line is $w characters wide"
   [ "$(printf '%s\n' "$OUT" | awk 'prev == "" && $0 == "" { n++ } { prev = $0 } END { print n + 0 }')" -eq 0 ] \
     || fail "the installer prints two blank lines in a row"

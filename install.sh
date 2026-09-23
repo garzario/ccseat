@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # ccseat installer: curl -fsSL https://raw.githubusercontent.com/garzario/ccseat/main/install.sh | bash
 #
-# Downloads ccseat into ${XDG_DATA_HOME:-~/.local/share}/ccseat/app, links
-# ~/.local/bin/ccseat and, after asking, adds one marked block to the shell
-# startup file so "claude" opens the right seat. From a clone (./install.sh)
-# it links the clone instead of downloading. It never uses sudo and never
-# installs dependencies: missing ones are listed with the exact command.
-# Run with --help for the options.
+# Downloads the latest release of ccseat into
+# ${XDG_DATA_HOME:-~/.local/share}/ccseat/app, links ~/.local/bin/ccseat and,
+# after asking, adds one marked block to the shell startup file so "claude"
+# opens the right seat. From a clone (./install.sh) it links the clone
+# instead of downloading. It never uses sudo and never installs dependencies:
+# missing ones are listed with the exact command. Run with --help for the
+# options.
+#
+# Downloads use https only and ignore ~/.curlrc. When a release publishes a
+# SHA256SUMS file, the archive is checked against it before anything is
+# installed.
 
 set -u
 # An exported CDPATH would make cd print folders and send it elsewhere.
@@ -21,7 +26,7 @@ assume_yes=0
 no_shell=0
 want_shell=""
 prefix=""
-ref="${CCSEAT_REF:-main}"
+ref="${CCSEAT_REF:-latest}"
 force_download=0
 action=install
 
@@ -37,7 +42,13 @@ fi
 say() { printf '%s\n' "$*"; }
 step() { printf '%s%s%s\n' "$c_ok" "$*" "$c_r"; }
 warn() { printf '%s%s%s\n' "$c_warn" "$*" "$c_r"; }
-die() { printf '%serror:%s %s\n' "$c_accent" "$c_r" "$*" >&2; exit "${2:-1}"; }
+note() { printf '%s%s%s\n' "$c_dim" "$*" "$c_r"; }
+# die MESSAGE [EXIT_CODE [HINT]]
+die() {
+  printf '%serror:%s %s\n' "$c_accent" "$c_r" "$1" >&2
+  [ -n "${3:-}" ] && printf '  %s\n' "$3" >&2
+  exit "${2:-1}"
+}
 
 usage() {
   cat <<'EOF_USAGE'
@@ -53,7 +64,9 @@ Options:
   --no-shell       do not touch any shell startup file
   --shell NAME     set up zsh, bash or fish instead of the shell in $SHELL
   --prefix DIR     link the command into DIR/bin (default ~/.local)
-  --ref REF        branch, tag or commit to download (default main, or CCSEAT_REF)
+  --ref REF        what to download: latest (the latest release, the default),
+                   a release tag such as v0.2.0, or a branch or commit such as
+                   main (also CCSEAT_REF)
   --download       download even when run from a clone
   --uninstall      remove the command, the downloaded copy and the shell block;
                    seats and settings stay ("ccseat uninstall --purge" removes them)
@@ -91,7 +104,16 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "${HOME:-}" ] || [ ! -d "$HOME" ]; then die "HOME is not set to a folder"; fi
-case "$ref" in ''|*[!A-Za-z0-9._/-]*|-*) die "not a valid ref: $ref" 2 ;; esac
+# The ref becomes part of a GitHub URL: no "..", which would climb out of
+# this repository (curl resolves it), and nothing git itself refuses.
+case "$ref" in
+  ''|*[!A-Za-z0-9._/-]*|-*|/*|*/|*..*|*//*|*.lock|*/.*|.*) die "not a valid ref: $ref" 2 ;;
+esac
+
+# An XDG base folder only counts when it is absolute (XDG spec), as in ccseat.
+xdg() { case "${1:-}" in /*) printf '%s' "$1" ;; *) printf '%s' "$2" ;; esac; }
+data_home=$(xdg "${XDG_DATA_HOME:-}" "$HOME/.local/share")
+config_home=$(xdg "${XDG_CONFIG_HOME:-}" "$HOME/.config")
 
 default_prefix=0
 if [ -z "$prefix" ]; then prefix="$HOME/.local"; default_prefix=1; fi
@@ -100,7 +122,7 @@ while [ "${#prefix}" -gt 1 ] && [ "${prefix%/}" != "$prefix" ]; do prefix="${pre
 bin_dir="$prefix/bin"
 link="$bin_dir/ccseat"
 if [ "$default_prefix" -eq 1 ]; then
-  app_dir="${XDG_DATA_HOME:-$HOME/.local/share}/ccseat/app"
+  app_dir="$data_home/ccseat/app"
 else
   app_dir="$prefix/share/ccseat/app"
 fi
@@ -182,7 +204,7 @@ rc_file_for() {
     bash)
       if [ "$os" = Darwin ]; then printf '%s/.bash_profile' "$HOME"
       else printf '%s/.bashrc' "$HOME"; fi ;;
-    fish) printf '%s/fish/conf.d/ccseat.fish' "${XDG_CONFIG_HOME:-$HOME/.config}" ;;
+    fish) printf '%s/fish/conf.d/ccseat.fish' "$config_home" ;;
   esac
 }
 
@@ -191,21 +213,26 @@ on_path() {
   return 1
 }
 
-# The folder as a shell word that survives a moved home: $HOME/... when it is
-# under the home folder.
+# The folder as it goes between double quotes in the startup file: $HOME/...
+# when it is under the home folder (it survives a moved home), the rest
+# escaped, so a folder name with $, `, " or \ stays text and never runs.
+# $1 = sh or fish (fish has no backquotes and keeps a backslash before other
+# characters). The same as ccseat setup writes.
 # shellcheck disable=SC2016  # $HOME is written to the startup file as is
 path_word() {
-  case "$1" in
-    "$HOME"/*) printf '$HOME%s' "${1#"$HOME"}" ;;
-    *) printf '%s' "$1" ;;
+  local d="$2" pre="" chars='[\\"$`]'
+  [ "$1" = fish ] && chars='[\\"$]'
+  case "$d" in
+    "$HOME"/*) pre='$HOME'; d=${d#"$HOME"} ;;
   esac
+  printf '%s%s' "$pre" "$(printf '%s' "$d" | sed "s/$chars/\\\\&/g")"
 }
 
 # The lines written to the startup file, between the markers.
 # shellcheck disable=SC2016  # $PATH and $(...) are for the startup file, not for now
 block_for() {
   local sh="$1" add_path="$2" pw
-  pw=$(path_word "$bin_dir")
+  if [ "$sh" = fish ]; then pw=$(path_word fish "$bin_dir"); else pw=$(path_word sh "$bin_dir"); fi
   printf '%s\n' "$MARK_BEGIN"
   case "$sh" in
     fish)
@@ -225,7 +252,7 @@ block_for() {
 # Copies a startup file into ccseat's backups folder before it is edited.
 backup_rc() {
   local f="$1" dir name
-  dir="${CCSEAT_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/ccseat}/backups"
+  dir="${CCSEAT_HOME:-$config_home/ccseat}/backups"
   (umask 077 && mkdir -p "$dir") 2>/dev/null || return 1
   name=$(basename "$f")
   cp -p "$f" "$dir/${name#.}.$(date +%Y%m%d-%H%M%S)" 2>/dev/null
@@ -303,8 +330,8 @@ setup_shell() {
 
   say ""
   say "ccseat adds a small block to $rc_shown so that \"claude\" opens"
-  say "your current seat (and switches when it hits a limit), and \"cs\" is"
-  say "short for \"ccseat\":"
+  say "your current seat (and switches when it hits a limit), and \"cc\""
+  say "opens the seat picker (cc with arguments still runs the C compiler):"
   printf '%s%s%s\n' "$c_dim" "$(printf '%s\n' "$block" | sed 's/^/    /')" "$c_r"
   ask "Add it now?"
   case $? in
@@ -339,35 +366,125 @@ local_source() {
   [ -f "$d/bin/ccseat" ] && [ -d "$d/lib/ccseat" ] && printf '%s' "$d"
 }
 
+# Where releases and archives come from (the tests point it at a folder).
+github_url() {
+  local u="${CCSEAT_GITHUB_URL:-https://github.com}"
+  printf '%s' "${u%/}"
+}
+
+# curl for every download. -q comes first so ~/.curlrc cannot change the
+# request (an "insecure" line there would turn off certificate checks); the
+# config on stdin allows https only, redirects included. It fails on HTTP
+# errors and gives up on a dead connection instead of hanging.
+# fetch URL [curl options...]
+fetch() {
+  local url="$1"
+  shift
+  printf 'proto = "=https"\n' \
+    | curl -q -K - -fsS --connect-timeout 20 --max-time 300 --retry 2 "$@" "$url"
+}
+
+# The tag of the latest release, like v0.1.0, from where
+# github.com/<repo>/releases/latest redirects (no API, so no rate limit).
+latest_release() {
+  local headers loc tag
+  headers=$(fetch "$(github_url)/$REPO/releases/latest" -I) || return 1
+  loc=$(printf '%s\n' "$headers" | tr -d '\r' | sed -n 's/^[Ll]ocation:[[:space:]]*//p' | tail -n 1)
+  case "$loc" in */releases/tag/*) tag=${loc##*/releases/tag/} ;; *) return 1 ;; esac
+  case "$tag" in ''|*[!A-Za-z0-9._-]*|.*|-*|*..*) return 1 ;; esac
+  printf '%s' "$tag"
+}
+
+# $1 = tag when ref is a release tag for sure (the latest release).
 tarball_url() {
   if [ -n "${CCSEAT_TARBALL_URL:-}" ]; then printf '%s' "$CCSEAT_TARBALL_URL"; return; fi
+  if [ "${1:-}" = tag ]; then
+    printf '%s/%s/archive/refs/tags/%s.tar.gz' "$(github_url)" "$REPO" "$ref"
+    return
+  fi
   case "$ref" in
-    v[0-9]*) printf 'https://github.com/%s/archive/refs/tags/%s.tar.gz' "$REPO" "$ref" ;;
+    v[0-9]*) printf '%s/%s/archive/refs/tags/%s.tar.gz' "$(github_url)" "$REPO" "$ref" ;;
     *)
       if printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
-        printf 'https://github.com/%s/archive/%s.tar.gz' "$REPO" "$ref"
+        printf '%s/%s/archive/%s.tar.gz' "$(github_url)" "$REPO" "$ref"
       else
-        printf 'https://github.com/%s/archive/refs/heads/%s.tar.gz' "$REPO" "$ref"
+        printf '%s/%s/archive/refs/heads/%s.tar.gz' "$(github_url)" "$REPO" "$ref"
       fi ;;
   esac
 }
 
-# A folder we may replace: it holds our program and nothing that looks like
-# user data.
+sha256_of() {
+  local out=""
+  if command -v sha256sum >/dev/null 2>&1; then out=$(sha256sum "$1" 2>/dev/null)
+  elif command -v shasum >/dev/null 2>&1; then out=$(shasum -a 256 "$1" 2>/dev/null)
+  elif command -v openssl >/dev/null 2>&1; then out=$(openssl dgst -sha256 -r "$1" 2>/dev/null)
+  fi
+  out=${out%% *}
+  [ -n "$out" ] || return 1
+  printf '%s' "$out" | tr 'ABCDEF' 'abcdef'
+}
+
+# Checks a release archive against the SHA256SUMS file published with the
+# release, when there is one: a line "<sha256>  ccseat-<version>.tar.gz"
+# for GitHub's archive of the tag. A mismatch stops the install.
+verify_archive() {
+  local file="$1" tag="$2" dir sums name want got code
+  dir=$(dirname "$file")
+  sums="$dir/SHA256SUMS"
+  name="ccseat-${tag#v}.tar.gz"
+  # Only a 404 means there is no checksum file. Any other failure (a
+  # timeout, a server error, a blocked host) stops the install, so a
+  # published checksum is never skipped.
+  if ! code=$(fetch "$(github_url)/$REPO/releases/download/$tag/SHA256SUMS" -L -o "$sums" -w '%{http_code}' 2>/dev/null); then
+    if [ "$code" = 404 ]; then
+      note "No checksum is published for $tag, so the download was not checked against one."
+      return 0
+    fi
+    die "could not download the checksums published with $tag" 1 \
+      "Nothing was installed. Try again later, and report it if it keeps happening."
+  fi
+  want=$(awk -v n="$name" '$2 == n || $2 == "*" n { print $1; exit }' "$sums" | tr 'ABCDEF' 'abcdef')
+  case "$want" in
+    *[!0-9a-f]*|'') die "the checksums published with $tag do not list $name" 1 "Nothing was installed." ;;
+  esac
+  [ "${#want}" -eq 64 ] || die "the checksums published with $tag do not list $name" 1 "Nothing was installed."
+  if ! got=$(sha256_of "$file"); then
+    warn "No sha256 tool (sha256sum, shasum or openssl), so the download was not checked."
+    return 0
+  fi
+  [ "$got" = "$want" ] || die "the download does not match the checksum published with $tag" 1 \
+    "Nothing was installed. Try again later, and report it if it keeps happening."
+  step "Checked the download against the checksum published with $tag."
+}
+
+# A folder we may replace or remove: it holds our program and nothing that
+# looks like user data. A git clone is never one, whatever it holds.
 is_our_app() {
-  [ -d "$1" ] && [ -f "$1/bin/ccseat" ] && [ -d "$1/lib/ccseat" ]
+  [ -d "$1" ] && [ -f "$1/bin/ccseat" ] && [ -d "$1/lib/ccseat" ] && ! [ -e "$1/.git" ]
 }
 
 download() {
-  local url tmp top stage old
+  local url tmp top stage old kind=""
   command -v curl >/dev/null 2>&1 || die "curl is needed to download ccseat. Install with: $(pkg_install_cmd curl)"
   command -v tar >/dev/null 2>&1 || die "tar is needed to unpack ccseat. Install with: $(pkg_install_cmd tar)"
-  url=$(tarball_url)
+  if [ -z "${CCSEAT_TARBALL_URL:-}" ] && [ "$ref" = latest ]; then
+    ref=$(latest_release) || die "could not find the latest release of ccseat on GitHub" 1 \
+      "Try again, or install the development version with: --ref main"
+    kind=tag
+  fi
+  url=$(tarball_url "$kind")
   say "Downloading ccseat ($ref)..."
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/ccseat-install.XXXXXX") || die "cannot create a temporary folder"
-  # shellcheck disable=SC2064  # expand now: the folder is fixed
-  trap "rm -rf '$tmp'" EXIT
-  curl -fsSL --retry 2 -o "$tmp/ccseat.tar.gz" "$url" || die "could not download $url"
+  # The folder's name stays out of the trap's code, so a quote in TMPDIR
+  # cannot break the cleanup.
+  install_tmp=$tmp
+  trap 'rm -rf "$install_tmp"' EXIT
+  fetch "$url" -L -o "$tmp/ccseat.tar.gz" || die "could not download $url"
+  if [ -z "${CCSEAT_TARBALL_URL:-}" ]; then
+    case "$kind:$ref" in
+      tag:*|:v[0-9]*) verify_archive "$tmp/ccseat.tar.gz" "$ref" ;;
+    esac
+  fi
   mkdir "$tmp/src" || die "cannot create a temporary folder"
   tar -xzf "$tmp/ccseat.tar.gz" -C "$tmp/src" 2>/dev/null || die "the download is not a valid archive: $url"
   top=$(find "$tmp/src" -mindepth 1 -maxdepth 1 -type d | head -n 1)
@@ -505,6 +622,8 @@ do_uninstall() {
   if is_our_app "$app_dir"; then
     rm -rf "$app_dir" && step "Removed $(tilde "$app_dir")." && removed=1
     rmdir "$(dirname "$app_dir")" 2>/dev/null
+  elif [ -e "$app_dir/.git" ]; then
+    warn "$(tilde "$app_dir") is a git clone; left alone."
   fi
   for rc in "${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
     if has_block "$rc"; then

@@ -1,16 +1,22 @@
 name: Bug report
 description: Something in ccseat does not work as expected
-labels: [bug]
+title: "[Bug] "
+labels: [bug, needs triage]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. Please never paste tokens or the contents of `.credentials.json`, and remove emails you do not want public.
+        Thanks for taking the time. Only the first box is required: a few sentences are enough, and everything else is optional.
+
+        **Never paste a token or the contents of `.credentials.json`.** Security problems go in a [private report](https://github.com/garzario/ccseat/security/advisories/new), not in an issue.
   - type: textarea
     id: what-happened
     attributes:
-      label: What happened
+      label: What happened?
       description: What you ran, what you expected, and what you got instead.
+      placeholder: |
+        I ran claude while alice was at its 5-hour limit. I expected it to open work,
+        but it opened alice again and Claude Code said I was out of usage.
     validations:
       required: true
   - type: textarea
@@ -18,24 +24,11 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. ccseat add
-        2. ...
+        1. ccseat use alice
+        2. claude
+        3. ...
     validations:
-      required: true
-  - type: textarea
-    id: doctor
-    attributes:
-      label: Output of `ccseat doctor`
-      render: text
-    validations:
-      required: true
-  - type: input
-    id: version
-    attributes:
-      label: ccseat version
-      placeholder: output of `ccseat version`
-    validations:
-      required: true
+      required: false
   - type: dropdown
     id: os
     attributes:
@@ -45,7 +38,7 @@ body:
         - Linux
         - Other
     validations:
-      required: true
+      required: false
   - type: dropdown
     id: shell
     attributes:
@@ -56,4 +49,19 @@ body:
         - fish
         - Other
     validations:
-      required: true
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: ccseat version
+      placeholder: 'output of "ccseat version"'
+    validations:
+      required: false
+  - type: textarea
+    id: doctor
+    attributes:
+      label: ccseat doctor output
+      description: Optional. Paste the output of `ccseat doctor`, after removing emails and folder names you do not want public.
+      render: text
+    validations:
+      required: false

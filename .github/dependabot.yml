@@ -1,0 +1,17 @@
+# Keeps the GitHub Actions used by CI up to date.
+# ccseat itself has no package dependencies to update.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One pull request a week for all action updates.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: CI
+    # Do not add labels outside the project's label set.
+    labels: []

@@ -1,22 +1,26 @@
 name: Feature request
 description: Suggest an idea for ccseat
-labels: [enhancement]
+title: "[Idea] "
+labels: [enhancement, needs triage]
 body:
-  - type: textarea
-    id: problem
+  - type: markdown
     attributes:
-      label: The problem
-      description: What is hard or slow today when you use several Claude Code accounts?
-    validations:
-      required: true
+      value: |
+        Thanks for the idea. Only the first box is required, and a sentence or two is plenty.
   - type: textarea
     id: idea
     attributes:
-      label: Your idea
-      description: How would you like ccseat to handle it?
+      label: What would you like?
+      description: What should ccseat do? A command, some output or a setting you have in mind is welcome.
+      placeholder: |
+        A way to hide a seat from the picker without removing it, for an account
+        I only use now and then.
     validations:
       required: true
   - type: textarea
-    id: alternatives
+    id: why
     attributes:
-      label: Alternatives you considered
+      label: Why would it help?
+      description: Optional. What is hard or slow today, and what you do instead.
+    validations:
+      required: false

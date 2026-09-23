@@ -11,6 +11,8 @@
 #   5-hour  ●●○○○○○○○○   18%  resets 6:20 PM
 #   weekly  ●●●●●●●●○○   79%  resets Saturday 6:00 AM
 #   running  build  ●●○○○○○○○○  25%     phase 1 of 4     0 of 3 agents done
+# A seat that is out says so on the row of the window at its limit, in red:
+#   weekly  ●●●●●●●●●●  100%   LIMIT REACHED until Thursday 4:00 PM, next: work
 # Limits come from the native rate_limits field and are copied into the seat's usage cache,
 # so "ccseat list" stays fresh. Before the first reply of a session they come from that
 # cache, refreshed in the background at most once a minute. It never waits on the network.
@@ -93,14 +95,14 @@ _ccseat_sl_palette() {
     _SL_R=${CCSEAT_C_RESET:-}; _SL_B=${CCSEAT_C_BOLD:-}; _SL_LABEL=${CCSEAT_C_MID:-}
     _SL_FAINT=${CCSEAT_C_FAINT:-}; _SL_TXT=${CCSEAT_C_TEXT:-}; _SL_SOFT=${CCSEAT_C_TEXT:-}
     _SL_MID=${CCSEAT_C_KRAFT:-}; _SL_HI=${CCSEAT_C_ORANGE:-}; _SL_RUN=${CCSEAT_C_BLUE:-}
-    _SL_ULTRA=${CCSEAT_C_PURPLE:-}
+    _SL_ULTRA=${CCSEAT_C_PURPLE:-}; _SL_RED=${CCSEAT_C_RED:-}
     return 0
   fi
   _SL_ON=1
   _ccseat_sl_color_enabled || _SL_ON=0
   if [ "$_SL_ON" -eq 0 ]; then
     _SL_R=""; _SL_B=""; _SL_LABEL=""; _SL_FAINT=""; _SL_TXT=""; _SL_SOFT=""
-    _SL_MID=""; _SL_HI=""; _SL_RUN=""; _SL_ULTRA=""
+    _SL_MID=""; _SL_HI=""; _SL_RUN=""; _SL_ULTRA=""; _SL_RED=""
     return 0
   fi
   _SL_R="${e}[0m"; _SL_B="${e}[1m"
@@ -112,6 +114,7 @@ _ccseat_sl_palette() {
   _SL_HI="${e}[38;2;217;119;87m"       # Orange: 85% and up, alerts
   _SL_RUN="${e}[38;2;106;155;204m"     # Blue: progress
   _SL_ULTRA="${e}[38;2;167;139;250m"   # ultracode
+  _SL_RED="${e}[38;2;229;83;75m"       # Red: a seat that is out, LIMIT REACHED
 }
 
 # Seat accent by position in the seat list: orange, blue, green, kraft, purple.
@@ -165,10 +168,11 @@ _ccseat_sl_dots() {
   _SL_OUT="$2$on$_SL_FAINT$off$_SL_R"
 }
 
-# "5-hour  ●●○○○○○○○○   18%  resets 6:20 PM". $4 = the reset time already written, if known.
+# "5-hour  ●●○○○○○○○○   18%  resets 6:20 PM". $4 = the reset time already written, if known;
+# $5 = a color for the dots and percent that wins (red for a window at its limit).
 _ccseat_sl_usage_row() {
-  local name=$1 p=$2 at=$3 r=${4:-} pp c dots
-  _ccseat_sl_pcolor "$p"; c=$_SL_PC
+  local name=$1 p=$2 at=$3 r=${4:-} c=${5:-} pp dots
+  [ -n "$c" ] || { _ccseat_sl_pcolor "$p"; c=$_SL_PC; }
   _ccseat_sl_dots "$p" "$c"; dots=$_SL_OUT
   printf -v pp '%3s' "$p"
   _SL_OUT="$_SL_LABEL$name  $_SL_R$dots  $c$pp%$_SL_R"
@@ -307,7 +311,8 @@ _ccseat_sl_cache_use() {
 
 # ---------- git ----------
 
-# Sets _SL_BRANCH and _SL_DIRTY for a folder with a single git call.
+# Sets _SL_BRANCH and _SL_DIRTY for a folder with a single git call. The
+# repository's own core.fsmonitor command is turned off for it.
 _ccseat_sl_git() {
   local line oid="" head=""
   _SL_BRANCH=""; _SL_DIRTY=0
@@ -320,7 +325,7 @@ _ccseat_sl_git() {
       ?*) _SL_DIRTY=1 ;;
     esac
   done <<EOF
-$(GIT_OPTIONAL_LOCKS=0 git -C "$1" status --porcelain=v2 --branch --ignore-submodules 2>/dev/null)
+$(GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor= -C "$1" status --porcelain=v2 --branch --ignore-submodules 2>/dev/null)
 EOF
   if [ -n "$head" ] && [ "$head" != "(detached)" ]; then _SL_BRANCH=$head
   elif [ -n "$oid" ] && [ "$oid" != "(initial)" ]; then _SL_BRANCH=${oid:0:7}; fi
@@ -345,28 +350,38 @@ _ccseat_sl_row1() {
   _SL_OUT=$r
 }
 
-# Adds "at its 5-hour limit, next: bob" to the usage row in _SL_OUT; the
-# other seat is named only when it fits.
+# Adds "almost out, next: bob" or "LIMIT REACHED until 6:20 PM, next: bob" to the usage
+# row in _SL_OUT, in color $3; the other seat is named only when it fits. $4 is a shorter
+# state ("LIMIT REACHED") for when the whole one does not fit.
 _ccseat_sl_hint() {
-  local state=$1 best=$2 row=$_SL_OUT
+  local state=$1 best=$2 hc=${3:-$_SL_HI} short=${4:-} row=$_SL_OUT idx="" st
   if [ -n "$best" ]; then
-    _ccseat_sl_vislen "$row$_CCSEAT_SL_GAP$state, next: $best"
-    if [ "$_SL_LEN" -le "$_CCSEAT_SL_WIDTH" ]; then
-      _SL_OUT="$row$_CCSEAT_SL_GAP$_SL_HI$state$_SL_R$_SL_LABEL, next: $_SL_R$_SL_TXT$best$_SL_R"
-      return 0
-    fi
     # A long seat name does not fit: point to it by its number in "ccseat list" instead.
-    local idx
     idx=$(ccseat_seat_list 2>/dev/null | awk -F '\t' -v n="$best" '$1 == n { print NR; exit }')
-    if [ -n "$idx" ]; then
-      _ccseat_sl_vislen "$row$_CCSEAT_SL_GAP$state, next: seat $idx"
+  fi
+  for st in "$state" "$short"; do
+    [ -n "$st" ] || continue
+    if [ -n "$best" ]; then
+      _ccseat_sl_vislen "$row$_CCSEAT_SL_GAP$st, next: $best"
       if [ "$_SL_LEN" -le "$_CCSEAT_SL_WIDTH" ]; then
-        _SL_OUT="$row$_CCSEAT_SL_GAP$_SL_HI$state$_SL_R$_SL_LABEL, next: $_SL_R${_SL_TXT}seat $idx$_SL_R"
+        _SL_OUT="$row$_CCSEAT_SL_GAP$hc$st$_SL_R$_SL_LABEL, next: $_SL_R$_SL_TXT$best$_SL_R"
         return 0
       fi
+      if [ -n "$idx" ]; then
+        _ccseat_sl_vislen "$row$_CCSEAT_SL_GAP$st, next: seat $idx"
+        if [ "$_SL_LEN" -le "$_CCSEAT_SL_WIDTH" ]; then
+          _SL_OUT="$row$_CCSEAT_SL_GAP$hc$st$_SL_R$_SL_LABEL, next: $_SL_R${_SL_TXT}seat $idx$_SL_R"
+          return 0
+        fi
+      fi
     fi
-  fi
-  _SL_OUT="$row$_CCSEAT_SL_GAP$_SL_HI$state$_SL_R"
+    _ccseat_sl_vislen "$row$_CCSEAT_SL_GAP$st"
+    if [ "$_SL_LEN" -le "$_CCSEAT_SL_WIDTH" ] || [ -z "$short" ] || [ "$st" = "$short" ]; then
+      _SL_OUT="$row$_CCSEAT_SL_GAP$hc$st$_SL_R"
+      return 0
+    fi
+  done
+  _SL_OUT="$row$_CCSEAT_SL_GAP$hc$state$_SL_R"
 }
 
 _ccseat_sl_render() {
@@ -375,6 +390,7 @@ _ccseat_sl_render() {
   local dir seat name seats cache="" age=999999 settings uc mode mode_color folder
   local row1 row2 row3="" seg best best_use n d oc use state us=$'\037'
   local rows tag a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 wp wok n_wf=0 pct_sum=0 t_ok=0 t_start=0
+  local isout=0 short="" hc back_at ulab out5=0 out7=0 c5="" c7="" at
   local t_fail=0 one_name="" one_k=0 one_n=0 n_solo=0 n_quiet=0 max_quiet=0 solo_name="" overall
   _ccseat_sl_width
 
@@ -404,7 +420,7 @@ _ccseat_sl_render() {
       (($s[0] // {}) | if type == "object" then (.ultracode == true) else false end),
       (.rate_limits.five_hour.resets_at | ep | resetlabel(now)),
       (.rate_limits.seven_day.resets_at | ep | resetlabel(now))
-    ] | map(tostring | gsub("[\u001f\n\r\t]"; " ")) | join("\u001f")'
+    ] | map(tostring | gsub("[\n\r\t]"; " ") | gsub("[[:cntrl:]]"; "")) | join("\u001f")'
   out=""
   [ -f "$settings" ] && out=$(printf '%s' "$input" | jq -r --slurpfile s "$settings" "$prog" 2>/dev/null)
   [ -n "$out" ] || out=$(printf '%s' "$input" | jq -r --argjson s '[]' "$prog" 2>/dev/null)
@@ -480,6 +496,10 @@ EOF
   esac
   [ -n "$cwd" ] || cwd=$(pwd)
   if [ "$cwd" = "$HOME" ]; then folder="home"; else folder=${cwd%/}; folder=${folder##*/}; fi
+  # A folder name can hold escape codes (git clones any file name); only
+  # the colors of this line reach the terminal.
+  folder=${folder//[[:cntrl:]]/}
+  name=${name//[[:cntrl:]]/}
   [ -n "$folder" ] || folder="/"
   _ccseat_sl_git "$cwd"
 
@@ -514,11 +534,28 @@ EOF
     case "$l5" in ''|*[!0-9]*) l5=95 ;; esac
     case "$l7" in ''|*[!0-9]*) l7=100 ;; esac
   fi
-  trig="" state=""
-  if [ "$wk" -ge 0 ] && [ "$wk" -ge "$l7" ]; then trig=weekly state="at its weekly limit"
-  elif [ "$fh" -ge 0 ] && [ "$fh" -ge "$l5" ]; then trig=5-hour state="at its 5-hour limit"
+  trig="" state="" hc=$_SL_HI
+  # A window at its limit is red, dots and percent.
+  [ "$fh" -ge 0 ] && [ "$fh" -ge "$l5" ] && out5=1 c5=$_SL_RED
+  [ "$wk" -ge 0 ] && [ "$wk" -ge "$l7" ] && out7=1 c7=$_SL_RED
+  if [ "$out7" = 1 ]; then trig=weekly isout=1
+  elif [ "$out5" = 1 ]; then trig=5-hour isout=1
   elif [ "$wk" -ge 85 ] && [ "$wk" -ge "$fh" ]; then trig=weekly state="almost out"
   elif [ "$fh" -ge 85 ]; then trig=5-hour state="almost out"
+  fi
+  # Out: the seat is back when the window at its limit resets (the later one when both
+  # are). The hint says until when, so that row leaves out its own "resets".
+  ulab=""
+  if [ "$isout" = 1 ]; then
+    if [ "$trig" = weekly ]; then back_at=$wk_at ulab=$wk_lab; else back_at=$fh_at ulab=$fh_lab; fi
+    if [ "$trig" = weekly ] && [ "$out5" = 1 ] && [ "$fh_at" -gt "$back_at" ]; then back_at=$fh_at ulab=$fh_lab; fi
+    if [ "$back_at" -gt 0 ]; then
+      [ -n "$ulab" ] || ulab=$(ccseat_fmt_reset "$back_at" 2>/dev/null)
+      [ "$ulab" = - ] && ulab=""
+    else
+      ulab=""
+    fi
+    state="LIMIT REACHED${ulab:+ until $ulab}" short="LIMIT REACHED" hc="$_SL_B$_SL_RED"
   fi
   best=""; best_use=101
   if [ -n "$trig" ]; then
@@ -538,13 +575,17 @@ EOF
   fi
   row2=""
   if [ "$fh" -ge 0 ]; then
-    _ccseat_sl_usage_row "5-hour" "$fh" "$fh_at" "$fh_lab"
-    [ "$trig" = 5-hour ] && _ccseat_sl_hint "$state" "$best"
+    at=$fh_at
+    [ "$trig" = 5-hour ] && [ -n "$ulab" ] && at=0
+    _ccseat_sl_usage_row "5-hour" "$fh" "$at" "$fh_lab" "$c5"
+    [ "$trig" = 5-hour ] && _ccseat_sl_hint "$state" "$best" "$hc" "$short"
     row2=$_SL_OUT
   fi
   if [ "$wk" -ge 0 ]; then
-    _ccseat_sl_usage_row "weekly" "$wk" "$wk_at" "$wk_lab"
-    [ "$trig" = weekly ] && _ccseat_sl_hint "$state" "$best"
+    at=$wk_at
+    [ "$trig" = weekly ] && [ -n "$ulab" ] && at=0
+    _ccseat_sl_usage_row "weekly" "$wk" "$at" "$wk_lab" "$c7"
+    [ "$trig" = weekly ] && _ccseat_sl_hint "$state" "$best" "$hc" "$short"
     row2="${row2:+$row2$'\n'}$_SL_OUT"
   fi
   [ -n "$row2" ] || row2="${_SL_LABEL}usage: no data yet$_SL_R"
@@ -751,8 +792,7 @@ _ccseat_sl_install() {
   shown=$(_ccseat_sl_tilde "$f")
   if [ ! -e "$real" ]; then
     (umask 077 && mkdir -p "${real%/*}") 2>/dev/null
-    printf '{}\n' > "$real" 2>/dev/null || { _ccseat_sl_err "cannot create $shown."; return 1; }
-    chmod 644 "$real" 2>/dev/null
+    (umask 077 && printf '{}\n' > "$real") 2>/dev/null || { _ccseat_sl_err "cannot create $shown."; return 1; }
     created=1
   fi
   state=$(ccseat_statusline_state "$real")

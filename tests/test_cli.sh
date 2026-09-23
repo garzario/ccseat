@@ -49,6 +49,33 @@ test_every_command_has_help() {
   assert_failure "help for an unknown command"
 }
 
+test_help_names_the_cc_shortcut() {
+  cs_ok help
+  assert_match "$OUT" '^  cc +the same, after ccseat setup' "the main help lists cc"
+  assert_not_match_cs "$OUT"
+  cs_ok help init
+  assert_contains "$OUT" "C compiler" "init explains that cc with arguments is still the compiler"
+  assert_contains "$OUT" "ccseat config shortcut"
+  cs_ok help config
+  assert_match "$OUT" '^  shortcut +cc ' "config documents the shortcut"
+  cs_ok config shortcut off
+  cs_ok help
+  assert_no_match "$OUT" '^  cc ' "without a shortcut the help does not offer one"
+  cs_ok config shortcut seats
+  cs_ok help
+  assert_match "$OUT" '^  seats +the same, after ccseat setup'
+  # A name as long as the column gets a line of its own.
+  cs_ok config shortcut abcdefghijabcdefghijabcdefghij12
+  cs_ok help
+  assert_match "$OUT" '^  abcdefghijabcdefghijabcdefghij12$'
+  assert_match "$OUT" '^ {32}the same, after ccseat setup'
+}
+
+# Nothing in the help still calls the shortcut cs.
+assert_not_match_cs() {
+  assert_no_match "$1" '(^|[^a-z])cs([^a-z]|$)' "the help mentions cs"
+}
+
 test_help_text_has_no_abbreviations() {
   cs_ok help
   assert_no_match "$OUT" '(^|[^a-z])(wk|ctx)([^a-z]|$)' "help avoids wk/ctx"
@@ -81,6 +108,7 @@ test_config_defaults() {
   assert_match "$OUT" 'limit_weekly[ =:]+100'
   assert_match "$OUT" 'remember[ =:]+on'
   assert_match "$OUT" 'colors[ =:]+auto'
+  assert_match "$OUT" 'shortcut[ =:]+cc'
   assert_contains "$OUT" "share"
   cs_ok config limit_5h
   assert_eq 95 "$OUT"
@@ -150,10 +178,25 @@ test_config_table_lines_up() {
   cs_ok config limit_5h 90
   export NO_COLOR=1
   run_pty -- bash -c 'stty cols 80 rows 30; exec ccseat config'
-  assert_match "$OUT" 'limit_5h +90 +5-hour percent that counts as the limit \(default 95\)'
+  assert_match "$OUT" 'limit_5h +90 +5-hour percent counted as the limit \(default 95\)'
   assert_match "$OUT" 'share +14 items +shared with'
+  assert_match "$OUT" 'shortcut +cc +opens the picker; cc file\.c still compiles'
+  # Every value starts in the same column, the longest setting's included.
+  assert_eq 1 "$(printf '%s\n' "$OUT" | tr -d '\r' | grep -E '^[a-z_0-9]+ ' \
+    | awk '{ print index($0, $2) }' | sort -u | grep -c .)" "the values line up"
   w=$(widest_line "$OUT")
   [ "$w" -le 80 ] || fail "a config line is $w characters wide"
+  # Changed settings, the longest notes, still fit 80 columns.
+  cs_ok config limit_weekly 90
+  cs_ok config remember off
+  cs_ok config colors never
+  cs_ok config shortcut cs
+  cs_ok config share settings.json
+  run_pty -- bash -c 'stty cols 80 rows 30; exec ccseat config'
+  assert_match "$OUT" 'shortcut +cs +shell shortcut for the picker, or off \(default cc\)'
+  assert_match "$OUT" 'share +1 item +shared with' "one shared item is 1 item"
+  w=$(widest_line "$OUT")
+  [ "$w" -le 80 ] || fail "a config line is $w characters wide with changed settings"
 }
 
 test_help_for_statusline_matches_its_own_help() {

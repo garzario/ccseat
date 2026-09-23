@@ -11,12 +11,15 @@
 #   ccseat_seat_for_dir <dir>    registered name of a config dir (primary when empty)
 #   ccseat_seat_color <name>     the seat's accent color escape
 
-CCSEAT_VERSION="0.1.0"
+CCSEAT_VERSION="0.2.0"
 
 CCSEAT_DEFAULT_SHARE="settings.json,CLAUDE.md,skills,agents,commands,rules,hooks,output-styles,plugins,projects,file-history,plans,todos,history.jsonl"
 # Per-account state that is never linked between seats, whatever "share" says.
 CCSEAT_NEVER_SHARE=".credentials.json credentials .claude.json .config.json sessions session-env statsig telemetry state cache shell-snapshots ide daemon tasks teams backups"
-CCSEAT_CONFIG_KEYS="auto_switch limit_5h limit_weekly remember share colors statusline_width"
+CCSEAT_CONFIG_KEYS="auto_switch limit_5h limit_weekly remember share colors statusline_width shortcut"
+# Names the shortcut never takes: shell keywords and builtins of bash, zsh
+# and fish that a function would hide, and ccseat's own two commands.
+CCSEAT__SHORTCUT_TAKEN=" claude ccseat alias and autoload begin bg bind bindkey builtin case cd chdir command compdef complete contains count declare disown do done echo elif else emulate end esac eval exec exit export false fg fi fish_config for function functions hash history if in jobs kill let local noglob not or print printf pushd popd pwd read readonly return select set setopt shift source status string switch test then time trap true type typeset ulimit umask unalias unset unsetopt until wait whence where which while "
 CCSEAT_TAB=$'\t'
 CCSEAT_NL=$'\n'
 
@@ -126,6 +129,22 @@ ccseat_write_file() {
   return 1
 }
 
+# Runs a command with "bash -x" tracing paused. A trace prints every command
+# with its values, so the functions that hold a login in variables run
+# through this and a trace pasted into a bug report never shows a token.
+ccseat__untraced() {
+  local rc
+  case $- in
+    *x*)
+      set +x
+      "$@"
+      rc=$?
+      set -x
+      return "$rc" ;;
+  esac
+  "$@"
+}
+
 # ---------- platform ----------
 
 ccseat_is_macos() {
@@ -188,6 +207,28 @@ ccseat__config_norm() {
         return 1
       fi
       CCSEAT__NORM=$val ;;
+    shortcut)
+      case "$val" in
+        off|Off|OFF|none|None|NONE) CCSEAT__NORM=off; return 0 ;;
+      esac
+      # The name goes into shell code, so the letters are spelled out:
+      # ranges can match other characters in some locales.
+      case "$val" in
+        ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*|[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_]*)
+          CCSEAT__NORM_ERR="shortcut takes a command name of letters, digits, dashes and underscores, or off"
+          return 1 ;;
+      esac
+      if [ "${#val}" -gt 32 ]; then
+        CCSEAT__NORM_ERR="shortcut takes a name of at most 32 characters"
+        return 1
+      fi
+      case "$CCSEAT__SHORTCUT_TAKEN" in
+        *" $val "*) CCSEAT__NORM_ERR="shortcut cannot be $val: that name belongs to the shell or to ccseat"; return 1 ;;
+      esac
+      case "$(type -t -- "$val" 2>/dev/null)" in
+        keyword|builtin) CCSEAT__NORM_ERR="shortcut cannot be $val: that name belongs to the shell or to ccseat"; return 1 ;;
+      esac
+      CCSEAT__NORM=$val ;;
     colors)
       case "$val" in
         auto) CCSEAT__NORM=auto ;;
@@ -239,6 +280,7 @@ ccseat_config_default() {
     share) printf '%s' "$CCSEAT_DEFAULT_SHARE" ;;
     colors) printf 'auto' ;;
     statusline_width) printf '80' ;;
+    shortcut) printf 'cc' ;;
     *) return 1 ;;
   esac
 }
@@ -251,7 +293,7 @@ ccseat_config_load() {
   {
     CCSEAT_CFG_auto_switch=on CCSEAT_CFG_limit_5h=95 CCSEAT_CFG_limit_weekly=100
     CCSEAT_CFG_remember=on CCSEAT_CFG_share=$CCSEAT_DEFAULT_SHARE CCSEAT_CFG_colors=auto
-    CCSEAT_CFG_statusline_width=80
+    CCSEAT_CFG_statusline_width=80 CCSEAT_CFG_shortcut=cc
   }
   CCSEAT__CFG_SET=" "
   [ -f "$CCSEAT_CONFIG_FILE" ] || return 0
@@ -389,10 +431,12 @@ ccseat__palette() {
     CCSEAT_C_BLUE=$(ccseat__rgb 106 155 204 68)
     CCSEAT_C_GREEN=$(ccseat__rgb 120 140 93 101)
     CCSEAT_C_PURPLE=$(ccseat__rgb 167 139 250 141)
+    # Red is kept for a seat that is out (at its limit): LIMIT REACHED.
+    CCSEAT_C_RED=$(ccseat__rgb 229 83 75 167)
   else
     CCSEAT_C_RESET="" CCSEAT_C_BOLD="" CCSEAT_C_TEXT="" CCSEAT_C_WHITE="" CCSEAT_C_MID=""
     CCSEAT_C_FAINT="" CCSEAT_C_ORANGE="" CCSEAT_C_KRAFT="" CCSEAT_C_BLUE="" CCSEAT_C_GREEN=""
-    CCSEAT_C_PURPLE=""
+    CCSEAT_C_PURPLE="" CCSEAT_C_RED=""
   fi
 }
 
@@ -411,6 +455,7 @@ ccseat_color() {
     blue|progress) printf '%s' "$CCSEAT_C_BLUE" ;;
     green|ok) printf '%s' "$CCSEAT_C_GREEN" ;;
     purple|ultracode) printf '%s' "$CCSEAT_C_PURPLE" ;;
+    red|out) printf '%s' "$CCSEAT_C_RED" ;;
   esac
   return 0
 }
@@ -446,9 +491,11 @@ ccseat_pct_color() {
   else printf '%s' "$CCSEAT_C_TEXT"; fi
 }
 
-# Ten dots, filled by percentage. $2=1 draws the whole bar faint.
+# Ten dots, filled by percentage. $2=1 draws the whole bar faint; $3 is a
+# color for the filled dots that wins over both (red for a window at its
+# limit).
 ccseat_bar() {
-  local p="${1:-}" dim="${2:-0}" f=0 k on="" off="" c
+  local p="${1:-}" dim="${2:-0}" f=0 k on="" off="" c="${3:-}"
   case "$p" in ''|-|*[!0-9]*) p=0 ;; esac
   [ "$p" -gt 100 ] && p=100
   f=$(( (p * 10 + 50) / 100 ))
@@ -458,7 +505,8 @@ ccseat_bar() {
     if [ "$k" -lt "$f" ]; then on="${on}●"; else off="${off}○"; fi
     k=$((k + 1))
   done
-  if [ "$dim" = 1 ]; then c=$CCSEAT_C_FAINT; else c=$(ccseat_pct_color "$p"); fi
+  if [ -n "$c" ]; then :
+  elif [ "$dim" = 1 ]; then c=$CCSEAT_C_FAINT; else c=$(ccseat_pct_color "$p"); fi
   printf '%s%s%s%s%s' "$c" "$on" "$CCSEAT_C_FAINT" "$off" "$CCSEAT_C_RESET"
 }
 
@@ -713,9 +761,11 @@ ccseat_trash() {
   # A hidden folder would be invisible in the Trash.
   case "$base" in .?*) base=${base#.} ;; esac
 
+  # A Trash folder ccseat has to create is private: the names of seat
+  # folders are the start of account emails.
   if [ -n "${CCSEAT_TRASH_DIR:-}" ]; then
     dir=$(ccseat_strip_slash "$CCSEAT_TRASH_DIR")
-    mkdir -p "$dir" 2>/dev/null || return 1
+    ccseat_mkdir_private "$dir" || return 1
     dest=$(ccseat__unique_dest "$dir" "$base")
     mv "$p" "$dest" || return 1
     CCSEAT_TRASHED_TO=$(ccseat_tilde "$dir")
@@ -734,7 +784,7 @@ ccseat_trash() {
       fi
     fi
     dir="$CCSEAT_USER_HOME/.Trash"
-    mkdir -p "$dir" 2>/dev/null || return 1
+    ccseat_mkdir_private "$dir" || return 1
     dest=$(ccseat__unique_dest "$dir" "$base")
     mv "$p" "$dest" || return 1
     CCSEAT_TRASHED_TO="the Trash"
@@ -743,7 +793,7 @@ ccseat_trash() {
 
   # freedesktop.org Trash, so file managers can restore it.
   dir="$(ccseat__xdg "${XDG_DATA_HOME:-}" "$CCSEAT_USER_HOME/.local/share")/Trash"
-  mkdir -p "$dir/files" "$dir/info" 2>/dev/null || return 1
+  { ccseat_mkdir_private "$dir/files" && ccseat_mkdir_private "$dir/info"; } || return 1
   dest=$(ccseat__unique_dest "$dir/files" "$base")
   info="$dir/info/$(basename "$dest").trashinfo"
   printf '[Trash Info]\nPath=%s\nDeletionDate=%s\n' "$p" "$(date +%Y-%m-%dT%H:%M:%S)" > "$info" 2>/dev/null
@@ -771,6 +821,12 @@ ccseat_registry_load() {
     d=${line#*"$CCSEAT_TAB"}
     d=${d%%"$CCSEAT_TAB"*}
     { [ -n "$n" ] && [ -n "$d" ]; } || continue
+    # A hand-edited line is used only when ccseat could have written it:
+    # names end up in file names and in tab completion, which the shell
+    # expands, and folders must not depend on the current folder.
+    ccseat__registry_name_ok "$n" || continue
+    case "$d" in /*) ;; *) continue ;; esac
+    case "$d" in *[[:cntrl:]]*) continue ;; esac
     ccseat__index_of_name "$n" >/dev/null && continue
     CCSEAT_NAMES[CCSEAT_N]=$n
     CCSEAT_DIRS[CCSEAT_N]=$(ccseat_strip_slash "$d")
@@ -780,6 +836,18 @@ ccseat_registry_load() {
 
 ccseat__registry_ensure() {
   [ "${CCSEAT__REG_LOADED:-0}" = 1 ] || ccseat_registry_load
+}
+
+# Seat names in the seats file: letters, digits, dots, dashes and
+# underscores, starting with a letter or a digit (ccseat itself writes them
+# lowercase). No quotes, spaces, "$(" or "/". Spelled out instead of ranges,
+# which some locales stretch to other characters.
+ccseat__registry_name_ok() {
+  case "${1:-}" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) return 1 ;;
+    [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]*) return 1 ;;
+  esac
+  return 0
 }
 
 ccseat_registry_save() {
@@ -1192,29 +1260,36 @@ ccseat_need_jq() {
 
 # ---------- ccseat config ----------
 
+# What a setting does, for the settings table. $2 is its value: the default
+# cc shortcut says that cc with arguments is still the C compiler.
 ccseat__config_desc() {
   case "$1" in
     auto_switch) printf 'switch to the freest seat at a limit' ;;
-    limit_5h) printf '5-hour percent that counts as the limit' ;;
-    limit_weekly) printf 'weekly percent that counts as the limit' ;;
+    limit_5h) printf '5-hour percent counted as the limit' ;;
+    limit_weekly) printf 'weekly percent counted as the limit' ;;
     remember) printf 'picker choice becomes the current seat' ;;
     share) printf 'shared with ~/.claude: ccseat config share' ;;
     colors) printf 'auto, always or never (NO_COLOR wins)' ;;
     statusline_width) printf 'columns the status line fits into' ;;
+    shortcut)
+      if [ "${2:-}" = cc ]; then printf 'opens the picker; cc file.c still compiles'
+      else printf 'shell shortcut for the picker, or off'; fi ;;
   esac
 }
 
 # A value as the settings table shows it: the share list as a count.
 ccseat__config_shown() {
-  local v="$1"
+  local v="$1" n
   case "$2" in
-    share) printf '%s items' "$(printf '%s\n' "$v" | tr ',' '\n' | grep -c .)" ;;
+    share)
+      n=$(printf '%s\n' "$v" | tr ',' '\n' | grep -c .)
+      if [ "$n" = 1 ]; then printf '1 item'; else printf '%s items' "$n"; fi ;;
     *) printf '%s' "$v" ;;
   esac
 }
 
 ccseat_cmd_config() {
-  local key="${1:-}" val k v def w=0 shown note
+  local key="${1:-}" val k v def w=0 kw=0 shown note
   case "$key" in
     -h|--help) ccseat_help config; return 0 ;;
   esac
@@ -1224,18 +1299,20 @@ ccseat_cmd_config() {
       for k in $CCSEAT_CONFIG_KEYS; do printf '%s=%s\n' "$k" "$(ccseat_config_get "$k")"; done
       return 0
     fi
+    # Columns as wide as the longest setting and the longest value.
     for k in $CCSEAT_CONFIG_KEYS; do
+      [ "${#k}" -gt "$kw" ] && kw=${#k}
       shown=$(ccseat__config_shown "$(ccseat_config_get "$k")" "$k")
       [ "${#shown}" -gt "$w" ] && w=${#shown}
     done
     for k in $CCSEAT_CONFIG_KEYS; do
       v=$(ccseat_config_get "$k")
       def=$(ccseat_config_default "$k")
-      note=$(ccseat__config_desc "$k")
+      note=$(ccseat__config_desc "$k" "$v")
       if [ "$v" != "$def" ]; then
         if [ "$k" = share ]; then note="$note (changed)"; else note="$note (default $def)"; fi
       fi
-      printf '%s  %s  %s%s%s\n' "$(ccseat_pad "$k" 12)" "$(ccseat_pad "$(ccseat__config_shown "$v" "$k")" "$w")" \
+      printf '%s  %s  %s%s%s\n' "$(ccseat_pad "$k" "$kw")" "$(ccseat_pad "$(ccseat__config_shown "$v" "$k")" "$w")" \
         "$CCSEAT_C_FAINT" "$note" "$CCSEAT_C_RESET"
     done
     return 0
@@ -1257,6 +1334,16 @@ ccseat_cmd_config() {
     ccseat_config_store "$key" "$CCSEAT__NORM" || ccseat_die "could not write $(ccseat_tilde "$CCSEAT_CONFIG_FILE")"
     ccseat_config_load
     printf '%s = %s\n' "$key" "$CCSEAT__NORM"
+  fi
+  if [ "$key" = shortcut ]; then
+    v=$(ccseat_config_get shortcut)
+    if [ "$v" = off ]; then
+      printf 'New terminals have no shortcut; ccseat opens the picker.\n'
+    elif [ "$v" = cc ]; then
+      printf 'Open a new terminal to use cc (cc with arguments still runs the C compiler).\n'
+    else
+      printf 'Open a new terminal to use %s (%s <command> runs ccseat <command>).\n' "$v" "$v"
+    fi
   fi
   if [ "$key" = share ] && declare -F ccseat__links_prune >/dev/null; then
     ccseat__registry_ensure

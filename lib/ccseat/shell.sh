@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2016 # shell code for the user's shell, printed as is
 # shellcheck disable=SC2034 # CCSEAT_YES is read by ccseat_confirm in core.sh
-# ccseat shell: "ccseat init <shell>" (the claude wrapper, the cs shortcut and
+# ccseat shell: "ccseat init <shell>" (the claude wrapper, the cc shortcut and
 # completions), "ccseat setup" (adds it to the shell startup file) and
 # "ccseat uninstall".
 #
@@ -54,7 +54,7 @@ ccseat__q() {
 }
 
 ccseat_cmd_init() {
-  local sh="" me
+  local sh="" me sc
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) ccseat_help init; return 0 ;;
@@ -66,16 +66,29 @@ ccseat_cmd_init() {
   [ -n "$sh" ] || ccseat_die_usage "which shell? Usage: ccseat init zsh (or bash, or fish)" init
   sh=${sh##*/}
   me=$(ccseat__self_word)
+  sc=$(ccseat__shortcut_name)
   case "$sh" in
-    zsh) ccseat__init_zsh "$(ccseat__q "$me")" ;;
-    bash) ccseat__init_bash "$(ccseat__q "$me")" ;;
-    fish) ccseat__init_fish "$me" ;;
+    zsh) ccseat__init_zsh "$(ccseat__q "$me")" "$sc" ;;
+    bash) ccseat__init_bash "$(ccseat__q "$me")" "$sc" ;;
+    fish) ccseat__init_fish "$me" "$sc" ;;
     *) ccseat_die_usage "ccseat supports zsh, bash and fish (not $sh)" init ;;
   esac
 }
 
+# The shortcut the shell integration defines ("shortcut" in ccseat config),
+# or nothing when it is off. The name goes into shell code unquoted, so it is
+# checked again here, whatever the config file says.
+ccseat__shortcut_name() {
+  local sc
+  sc=$(ccseat_config_get shortcut)
+  [ "$sc" = off ] && return 0
+  ccseat__config_norm shortcut "$sc" || return 0
+  [ "$CCSEAT__NORM" = off ] && return 0
+  printf '%s' "$CCSEAT__NORM"
+}
+
 ccseat__init_zsh() {
-  local me="$1"
+  local me="$1" sc="${2:-}"
   cat <<EOF
 # ccseat shell integration for zsh: eval "\$(ccseat init zsh)" in ~/.zshrc
 if [[ -o interactive ]]; then
@@ -90,9 +103,35 @@ if [[ -o interactive ]]; then
       command $me claude "\$@"
     fi
   }
-  if (( ! \$+commands[cs] && ! \$+aliases[cs] && ! \$+functions[cs] )); then
-    function cs { command $me "\$@"; }
+EOF
+  if [ -n "$sc" ]; then
+    cat <<EOF
+  # $sc opens the seat picker (ccseat config shortcut changes the name). A
+  # function or alias of your own with that name is left alone.
+  if (( ! \$+aliases[$sc] )) && { (( ! \$+functions[$sc] )) || [[ "\${__ccseat_shortcut:-}" == $sc ]]; }; then
+    __ccseat_shortcut=$sc
+EOF
+    if [ "$sc" = cc ]; then
+      cat <<EOF
+    # With arguments, cc is still the C compiler when one is installed.
+    function cc {
+      if (( \$# )) && (( \$+commands[cc] )); then
+        command cc "\$@"
+      else
+        command $me "\$@"
+      fi
+    }
+EOF
+    else
+      cat <<EOF
+    function $sc { command $me "\$@"; }
+EOF
+    fi
+    cat <<EOF
   fi
+EOF
+  fi
+  cat <<EOF
   if (( \$+functions[compdef] )); then
     function _ccseat {
       local -a cmds seats
@@ -107,20 +146,31 @@ if [[ -o interactive ]]; then
           seats=("\${(@f)\$(command $me __complete seats 2>/dev/null)}")
           compadd -a seats ;;
         init|setup) compadd zsh bash fish ;;
-        config) (( CURRENT == 3 )) && compadd auto_switch limit_5h limit_weekly remember share colors ;;
+        config) (( CURRENT == 3 )) && compadd $CCSEAT_CONFIG_KEYS ;;
         statusline) compadd install uninstall ;;
         help) compadd \${(@f)"\$(command $me __complete commands 2>/dev/null)"} ;;
       esac
     }
     compdef _ccseat ccseat
-    (( \$+functions[cs] )) && compdef _ccseat cs
+EOF
+  if [ "$sc" = cc ]; then
+    cat <<EOF
+    # cc keeps the compiler's completions while a compiler is installed.
+    if [[ "\${__ccseat_shortcut:-}" == cc ]] && (( ! \$+commands[cc] )); then compdef _ccseat cc; fi
+EOF
+  elif [ -n "$sc" ]; then
+    cat <<EOF
+    if [[ "\${__ccseat_shortcut:-}" == $sc ]]; then compdef _ccseat $sc; fi
+EOF
+  fi
+  cat <<EOF
   fi
 fi
 EOF
 }
 
 ccseat__init_bash() {
-  local me="$1"
+  local me="$1" sc="${2:-}"
   cat <<EOF
 # ccseat shell integration for bash: eval "\$(ccseat init bash)" in ~/.bashrc
 if [[ \$- == *i* ]]; then
@@ -135,9 +185,35 @@ if [[ \$- == *i* ]]; then
       command $me claude "\$@"
     fi
   }
-  if ! type -P cs >/dev/null 2>&1 && ! alias cs >/dev/null 2>&1 && ! declare -F cs >/dev/null 2>&1; then
-    function cs { command $me "\$@"; }
+EOF
+  if [ -n "$sc" ]; then
+    cat <<EOF
+  # $sc opens the seat picker (ccseat config shortcut changes the name). A
+  # function or alias of your own with that name is left alone.
+  if ! alias $sc >/dev/null 2>&1 && { ! declare -F $sc >/dev/null 2>&1 || [ "\${__ccseat_shortcut:-}" = $sc ]; }; then
+    __ccseat_shortcut=$sc
+EOF
+    if [ "$sc" = cc ]; then
+      cat <<EOF
+    # With arguments, cc is still the C compiler when one is installed.
+    function cc {
+      if [ \$# -gt 0 ] && type -P cc >/dev/null 2>&1; then
+        command cc "\$@"
+      else
+        command $me "\$@"
+      fi
+    }
+EOF
+    else
+      cat <<EOF
+    function $sc { command $me "\$@"; }
+EOF
+    fi
+    cat <<EOF
   fi
+EOF
+  fi
+  cat <<EOF
   _ccseat_complete() {
     local cur=\${COMP_WORDS[COMP_CWORD]} words
     COMPREPLY=()
@@ -149,7 +225,7 @@ if [[ \$- == *i* ]]; then
           [ "\$COMP_CWORD" -eq 2 ] || return 0
           words=\$(command $me __complete seats 2>/dev/null) ;;
         init|setup) words="zsh bash fish" ;;
-        config) [ "\$COMP_CWORD" -eq 2 ] && words="auto_switch limit_5h limit_weekly remember share colors" ;;
+        config) [ "\$COMP_CWORD" -eq 2 ] && words="$CCSEAT_CONFIG_KEYS" ;;
         statusline) words="install uninstall" ;;
         help) words=\$(command $me __complete commands 2>/dev/null) ;;
         *) return 0 ;;
@@ -158,20 +234,35 @@ if [[ \$- == *i* ]]; then
     COMPREPLY=(\$(compgen -W "\$words" -- "\$cur"))
   }
   complete -F _ccseat_complete ccseat
-  type -t cs 2>/dev/null | grep -q function && complete -F _ccseat_complete cs
+EOF
+  if [ "$sc" = cc ]; then
+    cat <<EOF
+  # cc keeps the compiler's completions while a compiler is installed.
+  if [ "\${__ccseat_shortcut:-}" = cc ] && ! type -P cc >/dev/null 2>&1; then complete -F _ccseat_complete cc; fi
+EOF
+  elif [ -n "$sc" ]; then
+    cat <<EOF
+  if [ "\${__ccseat_shortcut:-}" = $sc ]; then complete -F _ccseat_complete $sc; fi
+EOF
+  fi
+  cat <<EOF
 fi
 EOF
 }
 
 ccseat__init_fish() {
-  local me="$1" qme
-  qme=$(printf '%s' "$me" | sed "s/'/\\\\'/g")
+  local me="$1" sc="${2:-}" qme
+  # A fish single-quoted word: backslashes first, then quotes.
+  qme=$(printf '%s' "$me" | sed -e 's/\\/\\\\/g' -e "s/'/\\\\'/g")
   qme="'$qme'"
   [ "$me" = ccseat ] && qme=ccseat
+  # The completions below are single-quoted strings fish runs later, so they
+  # name ccseat through a variable instead of pasting the quoted path in.
   cat <<EOF
 # ccseat shell integration for fish: ccseat init fish | source
 if status is-interactive
     set -gx CCSEAT_SHELL fish
+    set -g __ccseat_cmd $qme
     function claude --wraps claude --description 'Claude Code in the current ccseat seat'
         if test -n "\$CCSEAT_NO_WRAP"; or not command -sq $qme
             command claude \$argv
@@ -179,18 +270,44 @@ if status is-interactive
             command $qme claude \$argv
         end
     end
-    if not command -sq cs; and not functions -q cs
-        function cs --wraps ccseat --description 'ccseat'
+EOF
+  if [ -n "$sc" ]; then
+    cat <<EOF
+    # $sc opens the seat picker (ccseat config shortcut changes the name). A
+    # function or alias of your own with that name is left alone.
+    if not functions -q $sc; or test "\$__ccseat_shortcut" = $sc
+        set -g __ccseat_shortcut $sc
+EOF
+    if [ "$sc" = cc ]; then
+      cat <<EOF
+        # With arguments, cc is still the C compiler when one is installed.
+        function cc --description 'ccseat seat picker; the C compiler with arguments'
+            if set -q argv[1]; and command -sq cc
+                command cc \$argv
+            else
+                command $qme \$argv
+            end
+        end
+        not command -sq cc; and complete -c cc --wraps ccseat
+EOF
+    else
+      cat <<EOF
+        function $sc --wraps ccseat --description 'ccseat'
             command $qme \$argv
         end
+EOF
+    fi
+    cat <<EOF
     end
+EOF
+  fi
+  cat <<EOF
     complete -c ccseat -f
-    complete -c ccseat -n __fish_use_subcommand -a '(command $qme __complete commands-fish 2>/dev/null)'
-    complete -c ccseat -n '__fish_seen_subcommand_from run use remove rm rename usage sync' -a '(command $qme __complete seats 2>/dev/null)'
+    complete -c ccseat -n __fish_use_subcommand -a '(command \$__ccseat_cmd __complete commands-fish 2>/dev/null)'
+    complete -c ccseat -n '__fish_seen_subcommand_from run use remove rm rename usage sync' -a '(command \$__ccseat_cmd __complete seats 2>/dev/null)'
     complete -c ccseat -n '__fish_seen_subcommand_from init setup' -a 'zsh bash fish'
-    complete -c ccseat -n '__fish_seen_subcommand_from config' -a 'auto_switch limit_5h limit_weekly remember share colors'
+    complete -c ccseat -n '__fish_seen_subcommand_from config' -a '$CCSEAT_CONFIG_KEYS'
     complete -c ccseat -n '__fish_seen_subcommand_from statusline' -a 'install uninstall'
-    functions -q cs; and complete -c cs --wraps ccseat
 end
 EOF
 }
@@ -230,15 +347,25 @@ ccseat__on_path() {
   return 1
 }
 
+# A folder as it goes between double quotes in a startup file: $HOME for
+# the home folder (it survives a moved home), the rest escaped, so a folder
+# name with $, `, " or \ stays text and never runs. $1 = sh or fish (fish
+# has no backquotes and keeps a backslash before other characters).
+ccseat__rc_word() {
+  local sh="$1" d="$2" pre="" chars='[\\"$`]'
+  [ "$sh" = fish ] && chars='[\\"$]'
+  case "$d" in
+    "$CCSEAT_USER_HOME"/*) pre="\$HOME"; d=${d#"$CCSEAT_USER_HOME"} ;;
+  esac
+  printf '%s%s' "$pre" "$(printf '%s' "$d" | sed "s/$chars/\\\\&/g")"
+}
+
 ccseat__block() {
-  local sh="$1" me dir word=""
+  local sh="$1" me word=""
   me=$(ccseat__self_word)
   if [ "$me" != ccseat ]; then
-    dir=$(dirname "$me")
-    case "$dir" in
-      "$CCSEAT_USER_HOME"/*) word="\$HOME${dir#"$CCSEAT_USER_HOME"}" ;;
-      *) word=$dir ;;
-    esac
+    if [ "$sh" = fish ]; then word=$(ccseat__rc_word fish "$(dirname "$me")")
+    else word=$(ccseat__rc_word sh "$(dirname "$me")"); fi
   fi
   printf '%s\n' "$CCSEAT_MARK_BEGIN"
   case "$sh" in
@@ -253,7 +380,7 @@ ccseat__block() {
 }
 
 ccseat_cmd_setup() {
-  local sh="" want_sl="" rc shown rc_status f
+  local sh="" want_sl="" rc shown rc_status f sc
   while [ $# -gt 0 ]; do
     case "$1" in
       --shell) [ $# -ge 2 ] || ccseat_die_usage "--shell needs zsh, bash or fish" setup; sh=$2; shift ;;
@@ -309,7 +436,14 @@ ccseat_cmd_setup() {
 
   printf '\nOpen a new terminal (or run: exec %s). Then:\n' "$sh"
   printf '  claude       opens the current seat; switches seats at a limit\n'
-  printf '  ccseat       pick a seat with the arrow keys (cs for short)\n'
+  sc=$(ccseat__shortcut_name)
+  if [ "$sc" = cc ]; then
+    printf '  cc           pick a seat with the arrow keys (cc file.c still compiles)\n'
+  elif [ -n "$sc" ]; then
+    printf '  %s  pick a seat with the arrow keys (the same as ccseat)\n' "$(ccseat_pad "$sc" 11)"
+  else
+    printf '  ccseat       pick a seat with the arrow keys\n'
+  fi
   printf '  ccseat add   add another account\n'
 }
 
@@ -352,20 +486,55 @@ ccseat__setup_statusline() {
 
 # ---------- uninstall ----------
 
-# Removes our block, and hand-added "ccseat init" lines, from a startup file.
+# Removes our block, and the one-line forms of "ccseat init" that ccseat
+# prints, from a startup file. Any other line that runs ccseat init (inside a
+# hand-written if, say) stays, and is listed for the user. When the result
+# would no longer parse in its shell, only the block goes, or nothing.
 # Writes in place so a symlinked dotfile stays a symlink; keeps a backup.
 ccseat__strip_rc() {
-  local f="$1" tmp
+  local f="$1" tmp mode ok_before=0
   [ -f "$f" ] || return 1
   grep -qF "$CCSEAT_MARK_BEGIN" "$f" 2>/dev/null || grep -Eq 'ccseat[[:space:]]+init' "$f" 2>/dev/null || return 1
   tmp=$(mktemp "${TMPDIR:-/tmp}/ccseat-rc.XXXXXX") || return 1
-  # A begin marker without its end marker is left alone with everything
-  # after it: only a whole block is removed.
-  awk -v b="$CCSEAT_MARK_BEGIN" -v e="$CCSEAT_MARK_END" '
+  ccseat__rc_parses "$f" "$f" && ok_before=1
+  for mode in lines block; do
+    ccseat__strip_rc_awk "$mode" "$f" > "$tmp" || { rm -f "$tmp"; return 1; }
+    [ "$ok_before" = 0 ] && break
+    ccseat__rc_parses "$tmp" "$f" && break
+    mode=none
+  done
+  if [ "$mode" = none ] || cmp -s "$f" "$tmp"; then
+    rm -f "$tmp"
+    ccseat__rc_leftovers "$f"
+    return 1
+  fi
+  ccseat__backup_to_trash "$f"
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
+  ccseat__rc_leftovers "$f"
+  return 0
+}
+
+# ccseat__strip_rc_awk lines|block FILE : prints FILE without our marked
+# block ("block"), and also without the exact one-line forms ("lines"):
+#   eval "$(ccseat init zsh)"   (or bash, or a path to ccseat)
+#   ccseat init fish | source
+#   if command -v ccseat >/dev/null 2>&1; then eval "$(ccseat init zsh)"; fi
+# A begin marker without its end marker is left alone with everything after
+# it: only a whole block is removed.
+ccseat__strip_rc_awk() {
+  awk -v b="$CCSEAT_MARK_BEGIN" -v e="$CCSEAT_MARK_END" -v lines="$([ "$1" = lines ] && echo 1)" '
+    function ours(s) {
+      sub(/^[ \t]+/, "", s); sub(/[ \t]+#[^"]*$/, "", s); sub(/[ \t]+$/, "", s)
+      if (s ~ /^eval "\$\((command )?[^ "()]*ccseat init (zsh|bash)\)"$/) return 1
+      if (s ~ /^(command )?[^ "()|]*ccseat init fish \| source$/) return 1
+      if (s ~ /^if command -v ccseat >\/dev\/null 2>&1; then eval "\$\(ccseat init (zsh|bash)\)"; fi$/) return 1
+      return 0
+    }
     !skip && $0 == b { skip = 1; dropped = held; held = 0; n = 0; buf[++n] = $0; next }
     skip && $0 == e { skip = 0; next }
     skip { buf[++n] = $0; next }
-    /ccseat[ \t]+init/ { next }
+    lines && ours($0) { next }
     { if (held) print ""; held = 0 }
     $0 == "" { held = 1; next }
     { print }
@@ -373,11 +542,64 @@ ccseat__strip_rc() {
       if (skip) { if (dropped) print ""; for (i = 1; i <= n; i++) print buf[i] }
       else if (held) print ""
     }
-  ' "$f" > "$tmp" || { rm -f "$tmp"; return 1; }
-  ccseat__backup_to_trash "$f"
-  cat "$tmp" > "$f"
-  rm -f "$tmp"
+  ' "$2"
+}
+
+# ccseat__rc_parses FILE AS : true when FILE parses in the shell that reads
+# the startup file AS, or when that shell is not installed.
+ccseat__rc_parses() {
+  case "$2" in
+    *.fish)
+      command -v fish >/dev/null 2>&1 || return 0
+      fish --no-config -n "$1" >/dev/null 2>&1 ;;
+    */.zshrc|*/.zprofile)
+      command -v zsh >/dev/null 2>&1 || return 0
+      zsh -f -n "$1" >/dev/null 2>&1 ;;
+    *)
+      command -v bash >/dev/null 2>&1 || return 0
+      BASH_ENV='' ENV='' bash --norc --noprofile -n "$1" >/dev/null 2>&1 ;;
+  esac
+}
+
+# Lists the lines of a startup file that still run ccseat init.
+ccseat__rc_leftovers() {
+  local nums word=line
+  nums=$(grep -nE '^[^#]*ccseat[[:space:]]+init' "$1" 2>/dev/null | cut -d: -f1 | paste -sd, - | sed 's/,/, /g')
+  [ -n "$nums" ] || return 0
+  case "$nums" in *,*) word=lines ;; esac
+  printf '%s·%s %s still runs ccseat init on %s %s; remove it by hand.\n' \
+    "$CCSEAT_C_FAINT" "$CCSEAT_C_RESET" "$(ccseat_tilde "$1")" "$word" "$nums"
+}
+
+# True when every entry of a folder matches one of the patterns after it.
+ccseat__holds_only_own() {
+  local dir="$1" e b pat ok
+  shift
+  for e in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    b=${e##*/}
+    ok=0
+    for pat in "$@"; do
+      # shellcheck disable=SC2254 # the patterns are globs on purpose
+      case "$b" in $pat) ok=1; break ;; esac
+    done
+    [ "$ok" = 1 ] || return 1
+  done
   return 0
+}
+
+# True when the program's folder holds ccseat and nothing else, so uninstall
+# may move all of it: the installer's copy, the share/ccseat of "make
+# install" or an unpacked release. bin and lib must hold only ccseat, and
+# anything else must be a file of the source tree.
+ccseat__program_dir_is_own() {
+  local root="$1"
+  [ "$root" = "$CCSEAT_DATA_DIR/app" ] && return 0
+  ccseat__holds_only_own "$root/bin" ccseat || return 1
+  ccseat__holds_only_own "$root/lib" ccseat || return 1
+  ccseat__holds_only_own "$root" bin lib LICENSE README.md CHANGELOG.md CONTRIBUTING.md \
+    CODE_OF_CONDUCT.md SECURITY.md Makefile install.sh docs tests Formula .github \
+    .editorconfig .gitignore .shellcheckrc .DS_Store
 }
 
 # Puts a copy of a file in the Trash before it is edited, so the old version
@@ -462,7 +684,15 @@ ccseat_cmd_uninstall() {
       i=$((i + 1))
     done
     for p in "$CCSEAT_HOME" "$CCSEAT_CACHE_DIR"; do
-      [ -e "$p" ] && ccseat_trash "$p" && printf 'Moved %s to the Trash.\n' "$(ccseat_tilde "$p")"
+      [ -e "$p" ] || continue
+      # CCSEAT_HOME can point at a folder other programs use too.
+      if [ "$p" = "$CCSEAT_HOME" ] && ! ccseat__holds_only_own "$p" \
+        seats current config backups statusline-previous.json .seats.lock '.ccseat.*' '.ccseat-edit-*' .DS_Store; then
+        printf 'Left %s in place: it holds other files too.\n' "$(ccseat_tilde "$p")"
+        printf "ccseat's own files there are seats, current, config and backups.\n"
+        continue
+      fi
+      ccseat_trash "$p" && printf 'Moved %s to the Trash.\n' "$(ccseat_tilde "$p")"
     done
     rmdir "$CCSEAT_SEATS_DIR" 2>/dev/null
   fi
@@ -479,13 +709,22 @@ ccseat_cmd_uninstall() {
         [ "$(ccseat_realpath "$p")" = "${CCSEAT_SELF:-}" ] || continue
         rm -f "$p" 2>/dev/null && printf 'Removed %s.\n' "$(ccseat_tilde "$p")"
       done
-      if [ -d "$root/.git" ]; then
+      # .git is a folder in a clone and a file in a worktree or submodule.
+      if [ -e "$root/.git" ]; then
         printf 'Left the source folder %s in place.\n' "$(ccseat_tilde "$root")"
       elif [ -n "$root" ] && [ -f "$root/bin/ccseat" ] && [ -d "$root/lib/ccseat" ] \
         && ! [ -e "$root/seats" ] && [ "$root" != "$CCSEAT_USER_HOME" ] && [ "$root" != "$CCSEAT_DATA_DIR" ]; then
-        if ccseat_trash "$root"; then
-          printf 'Moved the program (%s) to the Trash.\n' "$(ccseat_tilde "$root")"
-          rmdir "$CCSEAT_DATA_DIR" 2>/dev/null
+        if ccseat__program_dir_is_own "$root"; then
+          if ccseat_trash "$root"; then
+            printf 'Moved the program (%s) to the Trash.\n' "$(ccseat_tilde "$root")"
+            rmdir "$CCSEAT_DATA_DIR" 2>/dev/null
+          fi
+        else
+          # bin/ccseat and lib/ccseat copied into a prefix other programs
+          # share, like ~/.local or /usr/local: only those two leave it.
+          for p in "$root/bin/ccseat" "$root/lib/ccseat"; do
+            ccseat_trash "$p" && printf 'Moved %s to the Trash.\n' "$(ccseat_tilde "$p")"
+          done
         fi
       fi ;;
   esac

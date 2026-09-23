@@ -371,7 +371,7 @@ test_picker_one_line_layout_keeps_the_notes() {
   run_pty q -- bash -c 'stty cols 80 rows 12; exec ccseat pick'
   assert_match "$OUT" 'alice\.smith +5-hour +10% +weekly +100%!' "names are padded and a limit is marked"
   assert_match "$OUT" 'bob +5-hour +70%' "the numbers line up"
-  assert_contains "$OUT" "at its weekly limit"
+  assert_match "$OUT" 'weekly +100%! +LIMIT REACHED back ' "a seat that is out says so, with when it is back"
   assert_contains "$OUT" "current"
 }
 
@@ -418,8 +418,8 @@ test_list_fits_the_terminal_with_a_seat_at_its_limit() {
   cs_ok list
   export NO_COLOR=1
   run_pty -- bash -c 'stty cols 80 rows 30; exec ccseat list'
-  assert_contains "$OUT" "weekly limit"
-  assert_contains "$OUT" "5-hour limit"
+  assert_match "$OUT" 'alice\.smith .* limit reached' "the weekly limit"
+  assert_match "$OUT" 'bob .* limit reached' "the 5-hour limit"
   assert_match "$OUT" '^  #  seat' "the table still fits, with the short limit words"
   assert_not_contains "$OUT" "live, " "a seat at a limit says only that"
   w=$(widest_line "$OUT")
@@ -502,4 +502,128 @@ test_picker_without_seats_can_be_declined() {
   run_pty 'n\r' -- bash -c 'ccseat; echo "rc=$?"'
   assert_contains "$OUT" "rc=130"
   assert_eq 0 "$(launch_count)"
+}
+
+# ---------- a seat that is out (at its limit) ----------
+
+# alice (current, with room), work (the freest) and personal, out at its
+# weekly limit until 4:00 PM in two days. BACK is that time as ccseat writes
+# it ("Thursday 4:00 PM").
+seat_out_fixture() {
+  local back
+  pin_local_noon
+  make_primary alice@example.com
+  add_seat work@example.com
+  add_seat personal@example.com
+  cs_ok use alice
+  back=$((MIDNIGHT + 2 * 86400 + 16 * 3600))
+  usage_fixture alice@example.com 22 $((MIDNIGHT + 18 * 3600)) 64 $((MIDNIGHT + 4 * 86400))
+  usage_fixture work@example.com 12 $((MIDNIGHT + 19 * 3600)) 38 $((MIDNIGHT + 86400 + 9 * 3600))
+  usage_fixture personal@example.com 41 $((MIDNIGHT + 17 * 3600)) 100 "$back"
+  cs_ok list
+  BACK="$(epoch_fmt "$back" %A) 4:00 PM"
+  RED=$'\033[38;2;229;83;75m' BOLD=$'\033[1m' FAINT=$'\033[38;2;110;108;102m'
+  export COLORTERM=truecolor
+}
+
+# The text of a picker frame (1 is the first drawing), escape codes and all.
+nth_frame() {
+  local rest="$1" n="$2" k=0 sep=$'\033[H\033[J'
+  while [ "$k" -lt "$n" ]; do
+    case "$rest" in *"$sep"*) rest=${rest#*"$sep"} ;; *) return 1 ;; esac
+    k=$((k + 1))
+  done
+  printf '%s' "${rest%%"$sep"*}"
+}
+
+strip_codes() { printf '%s' "$1" | sed "s/$(printf '\033')\\[[0-9;?]*[A-Za-z]//g"; }
+
+test_picker_says_limit_reached() {
+  local w
+  seat_out_fixture
+  run_pty q -- bash -c 'stty cols 80 rows 24; exec ccseat pick'
+  assert_contains "$OUT" "${BOLD}${RED}LIMIT REACHED" "LIMIT REACHED in bold red"
+  assert_contains "$(strip_codes "$OUT")" "personal  LIMIT REACHED back $BACK" "after the name, with the time it is back"
+  assert_contains "$OUT" "${RED}●●●●●●●●●●" "the bar of the window at its limit is red, though the seat is not selected"
+  assert_contains "$OUT" "${RED}100%" "and so is its percent"
+  assert_eq 1 "$(strip_codes "$OUT" | grep -c 'LIMIT REACHED')" "only the seat that is out"
+  w=$(widest_line "$OUT")
+  [ "$w" -le 80 ] || fail "a picker line is $w characters wide on an 80-column terminal"
+  run_pty q -- bash -c 'stty cols 40 rows 24; exec ccseat pick'
+  assert_contains "$(strip_codes "$OUT")" "personal  LIMIT REACHED" "a narrow terminal keeps LIMIT REACHED"
+  w=$(widest_line "$OUT")
+  [ "$w" -le 40 ] || fail "a picker line is $w characters wide on a 40-column terminal"
+}
+
+test_picker_asks_before_opening_a_seat_that_is_out() {
+  local f
+  seat_out_fixture
+  run_pty 3 x q -- ccseat pick
+  assert_eq 0 "$(launch_count)" "a key other than y goes back to the list, where q cancels"
+  assert_eq 3 "$(frame_count "$OUT")" "the list, the question, then the list again"
+  f=$(nth_frame "$OUT" 2)
+  assert_contains "$(strip_codes "$f")" "personal is out until $BACK. Open it anyway? (y/N)" "the question is asked inside the picker"
+  assert_contains "$(printf '%s\n' "$f" | sed -n '/personal/,$p' | grep 5-hour)" "${FAINT}●●●●" \
+    "the window with room is dimmed even with the seat selected"
+  assert_contains "$(strip_codes "$(nth_frame "$OUT" 3)")" "enter or 1-9 open" "back to the list"
+  run_pty G '\r' n q -- ccseat pick
+  assert_eq 0 "$(launch_count)" "enter asks too, and n is no"
+  run_pty 3 y -- ccseat pick
+  assert_contains "$OUT" "stub-claude: CLAUDE_CONFIG_DIR=$(seat_dir personal)" "y opens it anyway"
+  run_pty G '\r' Y -- ccseat pick
+  assert_eq 2 "$(launch_count)" "enter, then Y, opens it too"
+  cs_ok current
+  assert_eq personal "$OUT" "the seat opened becomes the current one"
+  run_pty 2 -- ccseat pick
+  assert_contains "$OUT" "stub-claude: CLAUDE_CONFIG_DIR=$(seat_dir work)" "a seat with room opens without a question"
+}
+
+test_list_says_limit_reached_until_it_is_back() {
+  local w
+  seat_out_fixture
+  cs_ok list
+  assert_match "$OUT" "personal +41% .* 100% .* limit reached until $BACK\$"
+  assert_match "$OUT" 'alice .* live$'
+  assert_eq 1 "$(printf '%s\n' "$OUT" | grep -c 'limit reached')" "only the seat that is out"
+  cs_ok list --json
+  assert_json "$OUT" '.[2].at_limit == "weekly" and (.[2].limit_until | type) == "string"' "the JSON is unchanged"
+  run_pty -- bash -c 'stty cols 120 rows 30; exec ccseat list'
+  assert_contains "$OUT" "${BOLD}${RED}limit reached until $BACK" "bold red"
+  assert_contains "$OUT" "${RED}  100%" "the percent that put it out is red"
+  run_pty -- bash -c 'stty cols 80 rows 30; exec ccseat list'
+  assert_match "$(strip_codes "$OUT")" 'personal .* limit reached' "80 columns keep the table with the short words"
+  w=$(widest_line "$OUT")
+  [ "$w" -le 80 ] || fail "a list line is $w characters wide on an 80-column terminal"
+}
+
+test_run_warns_when_the_seat_is_out() {
+  seat_out_fixture
+  cs_ok run personal -p hi
+  assert_eq "ccseat: personal is out until $BACK (weekly limit), opening it anyway." "$ERR" "one line on stderr"
+  assert_contains "$OUT" "stub-claude: CLAUDE_CONFIG_DIR=$(seat_dir personal)" "then it opens"
+  assert_contains "$OUT" "stub-claude: args=-p hi"
+  cs_ok personal
+  assert_contains "$ERR" "personal is out until $BACK" "ccseat <seat> says it too"
+  cs_ok run work
+  assert_eq "" "$ERR" "a seat with room opens without a word"
+  usage_fixture work@example.com 97 $((MIDNIGHT + 19 * 3600)) 38 $((MIDNIGHT + 86400 + 9 * 3600))
+  cs_ok usage --refresh
+  cs_ok run work
+  assert_eq "ccseat: work is out until 7:00 PM (5-hour limit), opening it anyway." "$ERR"
+}
+
+test_wrapper_still_switches_away_from_a_seat_that_is_out() {
+  seat_out_fixture
+  cs_ok use personal
+  cs claude
+  assert_contains "$ERR" "personal is at its weekly limit until $BACK, using work" "the auto-switch message is unchanged"
+  assert_contains "$OUT" "CLAUDE_CONFIG_DIR=$(seat_dir work)"
+}
+
+test_usage_says_limit_reached() {
+  seat_out_fixture
+  cs_ok usage personal
+  assert_match "$OUT" "^    limit reached until $BACK \\(weekly limit\\)\$"
+  cs_ok usage work
+  assert_not_contains "$OUT" "limit reached"
 }

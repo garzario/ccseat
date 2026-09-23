@@ -74,7 +74,7 @@ ccseat_help() {
   case "$topic" in
     ""|help) ccseat__help_main ;;
     pick) cat <<'EOF'
-Usage: ccseat [pick]
+Usage: ccseat [pick]   (or cc, the shortcut of the shell integration)
 
 Shows every seat with its 5-hour and weekly usage and opens Claude Code with
 the one you choose. The cursor starts on the freest seat.
@@ -83,6 +83,10 @@ the one you choose. The cursor starts on the freest seat.
   enter            open the seat
   1 to 9           open that seat right away
   q, Esc           cancel
+
+A seat that is out (at its 5-hour or weekly limit) says LIMIT REACHED in red,
+with the time it is back. Opening it asks first: y opens it anyway, any other
+key goes back to the list.
 
 The chosen seat becomes the current one (turn that off with:
 ccseat config remember off). When the output is not a terminal, this prints
@@ -93,10 +97,10 @@ EOF
 Usage: ccseat list [--json]
 
 Every seat with its number, 5-hour and weekly usage, when each resets, and a
-status: live, how old the numbers are, at its 5-hour or weekly limit,
-offline, not logged in, or idle (its login renews the next time it opens).
-The current seat is marked with ❯. In a narrow terminal each seat takes a
-few lines instead of one row.
+status: live, how old the numbers are, limit reached until a time (in red:
+the seat is at its 5-hour or weekly limit), offline, not logged in, or idle
+(its login renews the next time it opens). The current seat is marked with
+❯. In a narrow terminal each seat takes a few lines instead of one row.
 
   --json   the same as JSON, for scripts (emails, folders, percents, resets)
 EOF
@@ -105,7 +109,8 @@ EOF
 Usage: ccseat run <seat> [claude arguments]
 
 Opens Claude Code with a seat, once, without changing the current seat. Any
-other arguments go to claude as they are.
+other arguments go to claude as they are. A seat that is out (at its 5-hour
+or weekly limit) still opens, after one line that says until when.
 
 Examples:
   ccseat run bob
@@ -140,7 +145,10 @@ time with ccseat rename.
   --name NAME     choose the seat's name yourself
   --dir FOLDER    use an existing Claude Code config folder instead of a new
                   one, for example one you opened with CLAUDE_CONFIG_DIR; if it
-                  is already logged in, no login is needed
+                  is already logged in, no login is needed. Only use folders
+                  you made yourself: a config folder can run commands (hooks,
+                  MCP servers), and its skills and agents join ~/.claude. A
+                  git repository or a project's .claude folder is refused.
 
 Every seat shares settings.json, CLAUDE.md, skills, agents, commands, rules,
 hooks, output styles, plugins, projects (conversations and memory), file
@@ -192,9 +200,9 @@ with the time each window resets, plus any weekly limit of a single model
 Numbers under a minute old come from the cache. Switching seats at a limit
 looks at the 5-hour and weekly limits only.
 
-  --refresh   fetch now (without a seat: fetch every seat)
-  --all       show every seat
-  --json      print JSON
+  -r, --refresh   fetch now (without a seat: fetch every seat)
+  -a, --all       show every seat
+  --json          print JSON
 EOF
     ;;
     claude) cat <<'EOF'
@@ -220,8 +228,14 @@ EOF
     init) cat <<'EOF'
 Usage: ccseat init <zsh|bash|fish>
 
-Prints the shell integration: a claude function that goes through ccseat (only
-in interactive shells), cs as a short name for ccseat, and completions.
+Prints the shell integration, for interactive shells only: a claude function
+that goes through ccseat, the cc shortcut, and completions.
+
+cc on its own opens the seat picker, like ccseat. With arguments it is still
+the C compiler (cc -o app app.c keeps working); without a compiler installed,
+cc <command> runs ccseat <command>. Choose another name, or none, with
+ccseat config shortcut NAME (or off). A function or alias of your own with
+that name is left alone.
 
   zsh    eval "$(ccseat init zsh)"      in ~/.zshrc
   bash   eval "$(ccseat init bash)"     in ~/.bashrc or ~/.bash_profile
@@ -236,6 +250,7 @@ Usage: ccseat setup [zsh|bash|fish] [--statusline | --no-statusline] [-y]
 Adds the shell integration to your shell startup file (once), makes your
 current Claude Code login the first seat, and offers the status line.
 
+  --shell NAME      set up zsh, bash or fish (the same as naming it)
   --statusline      install the status line without asking
   --no-statusline   leave the status line alone
   -y, --yes         answer yes to questions
@@ -262,20 +277,28 @@ Usage: ccseat config [setting [value]]
 Without arguments, prints every setting. With a setting, prints its value.
 With a value, changes it ("default" puts the default back).
 
-  auto_switch    on      switch to the freest seat when the current one is at
-                         its limit
-  limit_5h       95      5-hour usage (percent) that counts as the limit
-  limit_weekly   100     weekly usage (percent) that counts as the limit
-  remember       on      the seat chosen in the picker becomes the current seat
-  share          (list)  what every seat shares with ~/.claude, separated by
-                         commas; the default is settings.json, CLAUDE.md,
-                         skills, agents, commands, rules, hooks,
-                         output-styles, plugins, projects, file-history,
-                         plans, todos and history.jsonl
-  colors         auto    auto, always or never (NO_COLOR is respected)
+  auto_switch       on      switch to the freest seat when the current one is
+                            at its limit
+  limit_5h          95      5-hour usage (percent) that counts as the limit
+  limit_weekly      100     weekly usage (percent) that counts as the limit
+  remember          on      the seat chosen in the picker becomes the current
+                            seat
+  share             (list)  what every seat shares with ~/.claude, separated
+                            by commas; the default is settings.json,
+                            CLAUDE.md, skills, agents, commands, rules, hooks,
+                            output-styles, plugins, projects, file-history,
+                            plans, todos and history.jsonl
+  colors            auto    auto, always or never (NO_COLOR is respected)
+  statusline_width  80      columns the status line fits into, 40 to 400
+                            (Claude Code does not report the terminal width)
+  shortcut          cc      the shell shortcut that opens the picker, or off;
+                            cc with arguments still runs the C compiler, and
+                            any other name runs ccseat with its arguments
+                            (new terminals pick up a change)
 
 Examples:
   ccseat config limit_5h 90
+  ccseat config shortcut cs
   ccseat config share default
 EOF
     ;;
@@ -299,6 +322,21 @@ EOF
 }
 
 ccseat__help_main() {
+  local sc short=""
+  sc=$(ccseat_config_get shortcut)
+  case "$sc" in
+    off) ;;
+    cc) short="  cc                            the same, after ccseat setup (cc with
+                                arguments still runs the C compiler)
+" ;;
+    *)
+      # A long name gets its own line, like the wrapped lines below.
+      if [ "${#sc}" -lt 30 ]; then short="  $(ccseat_pad "$sc" 30)the same, after ccseat setup
+"
+      else short="  $sc
+                                the same, after ccseat setup
+"; fi ;;
+  esac
   cat <<EOF
 ccseat $CCSEAT_VERSION
 Use several Claude Code accounts side by side. Each account is a seat with its
@@ -309,7 +347,7 @@ Usage: ccseat [command] [arguments]
 
 Everyday
   ccseat                        choose a seat with the arrow keys and open it
-  claude                        opens the current seat and switches seats at a
+${short}  claude                        opens the current seat and switches seats at a
                                 limit (after ccseat setup)
   ccseat run <seat> [args]      open Claude Code with a seat
   ccseat list [--json]          every seat with its 5-hour and weekly usage

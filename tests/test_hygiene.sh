@@ -120,6 +120,114 @@ test_packaging_files_exist() {
   assert_contains "$(cat "$REPO_ROOT/.gitignore")" ".tmp/"
 }
 
+# The documentation layout: the README links into docs/, and GitHub finds the
+# community files in .github/.
+test_documentation_files_exist() {
+  local f
+  for f in README.md docs/README.md docs/installation.md docs/usage.md docs/commands.md \
+    docs/configuration.md docs/how-it-works.md docs/faq.md docs/troubleshooting.md \
+    docs/development.md tests/README.md .github/CONTRIBUTING.md .github/SECURITY.md \
+    .github/CODE_OF_CONDUCT.md .github/SUPPORT.md .github/pull_request_template.md \
+    .github/ISSUE_TEMPLATE/bug_report.yml .github/ISSUE_TEMPLATE/feature_request.yml \
+    .github/ISSUE_TEMPLATE/config.yml; do
+    assert_file "$REPO_ROOT/$f"
+  done
+  for f in CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md; do
+    assert_no_path "$REPO_ROOT/$f" "$f belongs in .github/, not at the top"
+  done
+}
+
+# Markdown files of the project (everything but .git and .tmp).
+md_files() {
+  find "$REPO_ROOT" \( -name .git -o -name .tmp \) -prune -o -type f -name '*.md' -print
+}
+
+# The anchor GitHub gives each heading of a Markdown file, one per line.
+md_anchors() {
+  awk '
+    /^[ \t]*(```|~~~)/ { fence = !fence; next }
+    fence { next }
+    /^#+[ \t]/ {
+      h = $0
+      sub(/^#+[ \t]+/, "", h)
+      sub(/[ \t]+#*[ \t]*$/, "", h)
+      h = tolower(h)
+      gsub(/[^a-z0-9 _-]/, "", h)
+      gsub(/ /, "-", h)
+      print h
+    }' "$1"
+}
+
+# Link targets of a Markdown file, one per line: [text](target), and src,
+# srcset and href attributes of inline HTML. Code blocks and inline code are
+# skipped.
+md_links() {
+  awk '
+    /^[ \t]*(```|~~~)/ { fence = !fence; next }
+    fence { next }
+    {
+      line = $0
+      gsub(/`[^`]*`/, "", line)
+      rest = line
+      while (match(rest, /\]\([^)]+\)/)) {
+        print substr(rest, RSTART + 2, RLENGTH - 3)
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      rest = line
+      while (match(rest, /(src|srcset|href)="[^"]+"/)) {
+        t = substr(rest, RSTART, RLENGTH)
+        sub(/^[a-z]+="/, "", t)
+        sub(/"$/, "", t)
+        print t
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }' "$1"
+}
+
+# Every relative link and image in the documentation points at a file that
+# exists, and every #anchor at a heading of that file.
+test_markdown_links_resolve() {
+  local md dir link path anchor target shown bad="" n=0
+  while IFS= read -r md; do
+    [ -n "$md" ] || continue
+    dir=$(dirname "$md")
+    shown=${md#"$REPO_ROOT"/}
+    while IFS= read -r link; do
+      case "$link" in
+        ''|http://*|https://*|mailto:*) continue ;;
+      esac
+      n=$((n + 1))
+      path=${link%%#*}
+      anchor=""
+      case "$link" in *'#'*) anchor=${link#*#} ;; esac
+      if [ -z "$path" ]; then
+        target=$md
+      else
+        case "$path" in
+          /*) target="$REPO_ROOT$path" ;;
+          *) target="$dir/$path" ;;
+        esac
+      fi
+      if [ ! -e "$target" ]; then
+        bad="$bad  $shown: $link (no such file)"$'\n'
+        continue
+      fi
+      [ -n "$anchor" ] || continue
+      case "$target" in
+        *.md)
+          md_anchors "$target" | grep -qxF -- "$anchor" \
+            || bad="$bad  $shown: $link (no such heading)"$'\n' ;;
+      esac
+    done <<EOF
+$(md_links "$md")
+EOF
+  done <<EOF
+$(md_files)
+EOF
+  [ "$n" -gt 0 ] || fail "no relative links found; the link check is not reading the files"
+  [ -z "$bad" ] || fail "broken links in the documentation:"$'\n'"$bad"
+}
+
 test_version_matches_changelog_and_formula() {
   local v
   [ -f "$REPO_ROOT/bin/ccseat" ] || skip "bin/ccseat is not written yet"

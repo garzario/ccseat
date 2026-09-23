@@ -71,6 +71,16 @@ sandbox_base_path() {
   printf '%s' "$p${p:+:}$sys"
 }
 
+# program_copy : puts a copy of bin/ and lib/ in the sandbox first on PATH,
+# for tests that run "ccseat uninstall". Uninstall moves the program's folder
+# to the Trash when it is not a git clone (an unpacked release, say), and the
+# program under test must never be the one that goes.
+program_copy() {
+  mkdir -p "$T/program"
+  cp -R "$REPO_ROOT/bin" "$REPO_ROOT/lib" "$T/program/" || fail "cannot copy the program"
+  export PATH="$T/program/bin:$PATH"
+}
+
 # ---------- running commands ----------
 
 # run_i CMD ARGS... : like run, for an interactive shell (bash -i, zsh -i,

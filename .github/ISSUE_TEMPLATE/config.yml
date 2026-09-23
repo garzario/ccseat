@@ -1,5 +1,8 @@
-blank_issues_enabled: false
+blank_issues_enabled: true
 contact_links:
-  - name: Security issue
+  - name: Ask a question
+    url: https://github.com/garzario/ccseat/discussions/new?category=q-a
+    about: Not sure something is a bug, or want to know how to do something? Ask in Discussions.
+  - name: Report a security problem
     url: https://github.com/garzario/ccseat/security/advisories/new
-    about: Please report security problems privately.
+    about: Report it privately, so it can be fixed before anyone else knows about it. Please do not open a public issue.

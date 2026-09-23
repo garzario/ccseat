@@ -81,15 +81,15 @@ test_doctor_finds_a_claude_alias_after_the_block() {
 
 test_doctor_lines_fit_and_line_up() {
   local w
-  make_primary patricio.garza@example.com
+  make_primary alice.anderson@example.com
   add_seat bob@example.com
   export SHELL=/bin/bash
-  CLAUDE_CONFIG_DIR="$HOME/.claude-cuenta2" run ccseat doctor
+  CLAUDE_CONFIG_DIR="$HOME/.claude-work" run ccseat doctor
   # The sandbox path of the claude stub is long only in tests.
   w=$(widest_line "$(printf '%s\n' "$OUT" | grep -v 'Claude Code 2\.')")
   [ "$w" -le 80 ] || fail "a doctor line is $w characters wide"$'\n'"$OUT"
   assert_match "$OUT" 'jq [0-9]' "jq shows as a plain version"
-  assert_eq "$(printf '%s\n' "$OUT" | awk '/patricio\.garza@/ { print index($0, "patricio.garza@") }')" \
+  assert_eq "$(printf '%s\n' "$OUT" | awk '/alice\.anderson@/ { print index($0, "alice.anderson@") }')" \
     "$(printf '%s\n' "$OUT" | awk '/ bob@/ { print index($0, "bob@") }')" "seat names are padded so the emails line up"
 }
 

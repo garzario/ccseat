@@ -585,6 +585,57 @@ test_add_dir_that_holds_home_or_the_primary_is_refused() {
   assert_not_contains "$(cat "$STUB/claude.log" 2>/dev/null)" "auth login" "no login was started"
 }
 
+test_add_dir_refuses_a_git_repository() {
+  local d
+  command -v git >/dev/null 2>&1 || skip "git is not installed"
+  make_primary alice@example.com
+  cs_ok list
+  mkdir -p "$HOME/code/webapp/src" "$HOME/code/webapp/.claude/commands"
+  printf '# Project memory\n' > "$HOME/code/webapp/CLAUDE.md"
+  printf '{"model":"haiku"}\n' > "$HOME/code/webapp/.claude/settings.json"
+  printf 'Deploy the app.\n' > "$HOME/code/webapp/.claude/commands/deploy.md"
+  git -C "$HOME/code/webapp" init -q || fail "git init"
+  for d in "$HOME/code/webapp" "$HOME/code/webapp/src" "$HOME/code/webapp/new-folder"; do
+    CCSEAT_STUB_LOGIN_EMAIL=bob@example.com run ccseat add --dir "$d"
+    assert_failure "adopting $d"
+    assert_contains "$ERR" "git repository"
+  done
+  CCSEAT_STUB_LOGIN_EMAIL=bob@example.com run ccseat add --dir "$HOME/code/webapp/.claude"
+  assert_failure "adopting a project's .claude folder"
+  assert_contains "$ERR" ".claude folder"
+  assert_no_path "$HOME/code/webapp/.claude.json"
+  assert_no_path "$HOME/code/webapp/.claude/.claude.json"
+  assert_no_path "$HOME/code/webapp/.ccseat-backup"
+  assert_no_path "$HOME/code/webapp/new-folder"
+  assert_not_symlink "$HOME/code/webapp/CLAUDE.md"
+  assert_not_symlink "$HOME/code/webapp/.claude/settings.json"
+  assert_file "$HOME/code/webapp/.claude/commands/deploy.md"
+  assert_no_path "$HOME/.claude/commands/deploy.md" "the project's commands joined ~/.claude"
+  assert_eq alice "$(seat_names | tr '\n' ' ' | sed 's/ $//')" "nothing was added"
+  assert_not_contains "$(cat "$STUB/claude.log" 2>/dev/null)" "auth login" "no login was started"
+}
+
+test_add_dir_needs_more_than_project_files() {
+  make_primary alice@example.com
+  mkdir -p "$T/notes/projects"
+  printf '# Notes\n' > "$T/notes/CLAUDE.md"
+  printf '{}\n' > "$T/notes/settings.json"
+  CCSEAT_STUB_LOGIN_EMAIL=bob@example.com run ccseat add --dir "$T/notes"
+  assert_failure "CLAUDE.md, settings.json and projects are not proof of a config folder"
+  assert_contains "$ERR" "does not look like a Claude Code config folder"
+  assert_no_path "$T/notes/.claude.json"
+  assert_not_symlink "$T/notes/CLAUDE.md"
+}
+
+test_add_dir_works_in_a_home_kept_in_git() {
+  command -v git >/dev/null 2>&1 || skip "git is not installed"
+  make_primary alice@example.com
+  git -C "$HOME" init -q || fail "git init"
+  login_seat_dir "$HOME/.claude-work" bob@example.com
+  cs_ok add --dir "$HOME/.claude-work"
+  assert_contains "$OUT" "Added bob"
+}
+
 test_adopt_moves_a_file_the_primary_lacks() {
   mkdir -p "$HOME/.claude"
   write_credentials "$HOME/.claude" alice@example.com
@@ -600,12 +651,12 @@ test_adopt_moves_a_file_the_primary_lacks() {
 test_adopt_notes_are_short_and_clear() {
   local w
   make_primary alice@example.com
-  login_seat_dir "$HOME/.claude-cuenta2" carol@example.com
-  printf '{"model":"haiku"}\n' > "$HOME/.claude-cuenta2/settings.json"
-  mkdir -p "$HOME/.claude-cuenta2/skills/mine" "$HOME/.claude-cuenta2/projects/-work-app"
-  printf 'x\n' > "$HOME/.claude-cuenta2/skills/mine/SKILL.md"
-  printf '{}\n' > "$HOME/.claude-cuenta2/projects/-work-app/s.jsonl"
-  cs_ok add --dir "$HOME/.claude-cuenta2"
+  login_seat_dir "$HOME/.claude-work" carol@example.com
+  printf '{"model":"haiku"}\n' > "$HOME/.claude-work/settings.json"
+  mkdir -p "$HOME/.claude-work/skills/mine" "$HOME/.claude-work/projects/-work-app"
+  printf 'x\n' > "$HOME/.claude-work/skills/mine/SKILL.md"
+  printf '{}\n' > "$HOME/.claude-work/projects/-work-app/s.jsonl"
+  cs_ok add --dir "$HOME/.claude-work"
   assert_contains "$OUT" "It now shares"
   assert_contains "$OUT" ".ccseat-backup"
   assert_contains "$OUT" "Copied 1 skill and 1 project that ~/.claude did not have."
@@ -649,13 +700,13 @@ test_add_says_why_the_same_account_came_back() {
 
 test_first_run_points_at_other_logins() {
   make_primary alice@example.com
-  login_seat_dir "$HOME/.claude-cuenta2" bob@example.com
-  login_seat_dir "$HOME/.claude-cuenta3" carol@example.com
+  login_seat_dir "$HOME/.claude-work" bob@example.com
+  login_seat_dir "$HOME/.claude-personal" carol@example.com
   cs_ok list
   assert_contains "$ERR" "Found 2 more logins"
-  assert_contains "$ERR" "ccseat add --dir ~/.claude-cuenta2"
-  assert_contains "$ERR" "ccseat add --dir ~/.claude-cuenta3"
-  cs_ok add --dir "$HOME/.claude-cuenta2"
+  assert_contains "$ERR" "ccseat add --dir ~/.claude-work"
+  assert_contains "$ERR" "ccseat add --dir ~/.claude-personal"
+  cs_ok add --dir "$HOME/.claude-work"
   assert_not_contains "$(cat "$STUB/claude.log" 2>/dev/null)" "auth login" "no second sign-in"
 }
 

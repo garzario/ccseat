@@ -212,7 +212,7 @@ test_statusline_full_input_fixture() {
 
 test_statusline_rows_fit_80_columns() {
   local w
-  make_primary patricio.garza@example.com
+  make_primary alice.anderson@example.com
   add_seat bob@example.com
   make_workflow_fixture sess-1 wf_abc ship-release-notes
   make_background_agent "$WF_SESSION_DIR" bg1 "look for flaky tests"
@@ -233,13 +233,13 @@ test_statusline_limit_words_follow_the_limits() {
   add_seat bob@example.com
   export NO_COLOR=1
   run_in "$(statusline_input "$HOME" '.rate_limits.five_hour.used_percentage = 97 | .rate_limits.seven_day.used_percentage = 30')" ccseat statusline
-  assert_contains "$(row 2)" "at its 5-hour limit" "97% is at the default 95% limit, like ccseat list says"
-  assert_not_contains "$(row 3)" "limit" "the note sits on the row that caused it"
+  assert_contains "$(row 2)" "LIMIT REACHED" "97% is at the default 95% limit, like ccseat list says"
+  assert_not_contains "$(row 3)" "LIMIT" "the note sits on the row that caused it"
   run_in "$(statusline_input "$HOME" '.rate_limits.five_hour.used_percentage = 90 | .rate_limits.seven_day.used_percentage = 30')" ccseat statusline
   assert_contains "$(row 2)" "almost out"
   cs_ok config limit_5h 85
   run_in "$(statusline_input "$HOME" '.rate_limits.five_hour.used_percentage = 90 | .rate_limits.seven_day.used_percentage = 30')" ccseat statusline
-  assert_contains "$(row 2)" "at its 5-hour limit" "a custom limit counts"
+  assert_contains "$(row 2)" "LIMIT REACHED" "a custom limit counts"
 }
 
 test_statusline_preview_hint_fits() {
@@ -263,4 +263,60 @@ test_statusline_names_the_next_seat_by_number_when_the_name_is_long() {
   cs_ok config statusline_width 160
   run_in "$(statusline_input "$HOME" '.rate_limits.five_hour.used_percentage = 97 | .rate_limits.seven_day.used_percentage = 30')" ccseat statusline
   assert_contains "$(row 2)" "next: averyveryverylongaccountname.example" "a wider status line names the seat"
+}
+
+# ---------- a seat that is out (at its limit) ----------
+
+test_statusline_says_limit_reached_until_the_seat_is_back() {
+  local red=$'\033[38;2;229;83;75m'
+  pin_local_noon
+  make_primary alice@example.com
+  add_seat bob@example.com
+  usage_fixture bob@example.com 5 $((MIDNIGHT + 20 * 3600)) 10 $((MIDNIGHT + 5 * 86400))
+  cs_ok list
+  FA=$((MIDNIGHT + 18 * 3600 + 20 * 60)) WA=$((MIDNIGHT + 3 * 86400 + 6 * 3600))
+  export NO_COLOR=1
+  run_in "$(statusline_input "$HOME" '.rate_limits.seven_day.used_percentage = 100')" ccseat statusline
+  assert_match "$(row 3)" "^weekly +●{10} +100% +LIMIT REACHED until $(epoch_fmt "$WA" %A) 6:00 AM, next: bob\$" \
+    "the weekly row says until when, then the next seat"
+  assert_not_contains "$(row 3)" "resets" "the time is said once"
+  assert_match "$(row 2)" '^5-hour .* 23% +resets 6:20 PM$' "the other row keeps its reset"
+  run_in "$(statusline_input "$HOME" '.rate_limits.five_hour.used_percentage = 97')" ccseat statusline
+  assert_match "$(row 2)" '^5-hour +●{10} +97% +LIMIT REACHED until 6:20 PM, next: bob$'
+  assert_not_contains "$(row 3)" "LIMIT"
+  # Both windows out: the seat is back when the later one resets.
+  FA=$((MIDNIGHT + 18 * 3600)) WA=$((MIDNIGHT + 16 * 3600))
+  run_in "$(statusline_input "$HOME" '.rate_limits.five_hour.used_percentage = 97 | .rate_limits.seven_day.used_percentage = 100')" ccseat statusline
+  assert_match "$(row 3)" '^weekly .* LIMIT REACHED until 6:00 PM, next: bob$' "the later reset of the two"
+  assert_match "$(row 2)" '^5-hour .* 97% +resets 6:00 PM$'
+  unset NO_COLOR
+  export COLORTERM=truecolor
+  run_in "$(statusline_input "$HOME" '.rate_limits.seven_day.used_percentage = 100')" ccseat statusline
+  assert_contains "$OUT" $'\033[1m'"${red}LIMIT REACHED until" "bold red"
+  assert_contains "$OUT" "${red}●●●●●●●●●●" "the dots of the window at its limit are red"
+}
+
+test_statusline_limit_reached_fits_the_width() {
+  local w
+  pin_local_noon
+  make_primary alice.anderson@example.com
+  add_seat averyveryverylongaccountname.example@example.com
+  usage_fixture averyveryverylongaccountname.example@example.com 5 0 10 0
+  cs_ok list
+  # The longest reset words: a weekday and a two-digit hour.
+  FA=$((MIDNIGHT + 22 * 3600)) WA=$((MIDNIGHT + 5 * 86400 + 10 * 3600))
+  export NO_COLOR=1
+  run_in "$(statusline_input "$HOME" '.rate_limits.seven_day.used_percentage = 100')" ccseat statusline
+  w=$(widest_line "$OUT")
+  [ "$w" -le 80 ] || fail "a status line row is $w characters wide"$'\n'"$OUT"
+  assert_match "$(row 3)" "LIMIT REACHED until $(epoch_fmt "$WA" %A) 10:00 AM, next: seat 2\$" "a long name gives way to its number"
+  run_in "$(statusline_input "$HOME" '.rate_limits.five_hour.used_percentage = 99')" ccseat statusline
+  w=$(widest_line "$OUT")
+  [ "$w" -le 80 ] || fail "a status line row is $w characters wide"$'\n'"$OUT"
+  assert_contains "$(row 2)" "LIMIT REACHED until 10:00 PM"
+  cs_ok config statusline_width 50
+  run_in "$(statusline_input "$HOME" '.rate_limits.seven_day.used_percentage = 100')" ccseat statusline
+  assert_match "$(row 3)" '^weekly +●{10} +100% +LIMIT REACHED$' "a narrow status line keeps LIMIT REACHED"
+  w=$(widest_line "$(row 3)")
+  [ "$w" -le 50 ] || fail "the weekly row is $w characters wide in 50 columns"
 }
