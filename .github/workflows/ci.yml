@@ -59,3 +59,19 @@ jobs:
           # macOS runs everything with the system bash 3.2.
           CCSEAT_TEST_BASH: ${{ runner.os == 'macOS' && '/bin/bash' || '' }}
         run: /bin/bash tests/run.sh -j 4 -t 120
+
+  homebrew:
+    name: homebrew formula
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tap this repository and install
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew tap garzario/ccseat "$GITHUB_WORKSPACE"
+          brew install garzario/ccseat/ccseat
+          brew test garzario/ccseat/ccseat
+          ccseat --version
+          brew style garzario/ccseat/ccseat
