@@ -15,8 +15,9 @@
   <a href="https://github.com/garzario/ccseat/discussions">Ask a question</a>
 </p>
 
-<p align="center"><b>Use all your Claude Code accounts side by side.</b><br>
-Pick one with the arrow keys, see every account's usage, and let <code>claude</code> move to a free account when one hits its limit.</p>
+<p align="center"><b>Use all your Claude Code accounts side by side, right from your terminal.</b><br>
+Pick one with the arrow keys, see every account's usage, and let <code>claude</code> move to a free account when one hits its limit.<br>
+<sub>For the Claude Code CLI in the terminal (macOS and Linux). The desktop app, claude.ai and editor extensions keep their own login.</sub></p>
 
 <p align="center">
   <img src="docs/assets/screenshots/picker.png" width="720" alt="The ccseat picker in a terminal. Three seats, alice, work and personal, each with 5-hour and weekly usage bars and reset times. personal is at its weekly limit: its name row says LIMIT REACHED in bold red, then back Thursday 4:00 PM, and its weekly bar and percent are red. alice is the current seat, and the cursor is on work, the freest seat.">

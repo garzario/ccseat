@@ -10,6 +10,8 @@ All notable changes to ccseat are listed here. The format follows
 
 - How Remote Control works with seats: each seat links its sessions to its
   own account.
+- ccseat is for the Claude Code command line in a terminal; the desktop app,
+  claude.ai and editor extensions keep their own login.
 
 ## [0.2.2] - 2026-09-23
 

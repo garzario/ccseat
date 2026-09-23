@@ -63,6 +63,10 @@ Do this only for a seat ccseat added, never for the primary seat: in `~/.claude`
 
 For an account that shares nothing at all, do not add it as a seat, and open it yourself with `CLAUDE_CONFIG_DIR=~/claude-private claude`. ccseat opens folders it does not know exactly as asked.
 
+## Does it work with the desktop app, claude.ai or editor extensions?
+
+No. ccseat is for the Claude Code command line in a terminal (TUI only). The Claude desktop app, claude.ai and the VS Code or JetBrains extensions sign in on their own and are not changed by ccseat. Editor extensions that start Claude Code keep using `~/.claude`, your primary seat.
+
 ## Do editors and scripts use ccseat?
 
 Only commands that go through the `claude` shell function or `ccseat` do. The shell function exists in interactive shells only, so editor extensions and scripts that start Claude Code by themselves keep using `~/.claude`, or whatever `CLAUDE_CONFIG_DIR` they are given.
